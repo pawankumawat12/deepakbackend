@@ -1,16 +1,16 @@
 const bcrypt = require("bcrypt");
 
 exports.seed = async function (knex) {
-  const adminExists = await knex("users").where({ email: "pawan@yopmail.com" }).first();
+  const adminExists = await knex("users").where({ email: process.env.ADMIN_EMAIL }).first();
   if (adminExists) {
     return;
   }
 
-  const hashedPassword = await bcrypt.hash("Pawan@123", 10);
+  const hashedPassword = await bcrypt.hash(process.env.ADMIN_PASSWORD, 10);
 
   await knex("users").insert({
     name: "Pawan",
-    email: "pawan@yopmail.com",
+    email: process.env.ADMIN_EMAIL,
     password: hashedPassword,
     role: "admin",
   });

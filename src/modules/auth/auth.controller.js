@@ -13,19 +13,31 @@ const {
 // REGISTER (normal user)
 async function register(req, res) {
   try {
-    const { name, email, password } = req.body;
-    const { valid, errors } = validateRegister({ name, email, password });
+    const { name, email, password } = req.body || {};
+
+    const { valid, errors } = validateRegister({
+      name,
+      email,
+      password,
+    });
 
     if (!valid) {
-      return res.status(400).json({ message: "Validation failed", errors });
+      return res.status(400).json({
+        message: "Validation failed",
+        errors,
+      });
     }
 
     const existingUser = await findUserByEmail(email);
+
     if (existingUser) {
-      return res.status(400).json({ message: "Email already registered" });
+      return res.status(400).json({
+        message: "Email already registered",
+      });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+
     const user = await createUser({
       name,
       email,
@@ -33,13 +45,18 @@ async function register(req, res) {
       role: "user",
     });
 
-    res.status(201).json({ message: "User registered successfully", user });
+    return res.status(201).json({
+      message: "User registered successfully",
+      user,
+    });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: "Server error" });
+
+    return res.status(500).json({
+      message: "Server error",
+    });
   }
 }
-
 // REGISTER ADMIN
 async function registerAdmin(req, res) {
   try {

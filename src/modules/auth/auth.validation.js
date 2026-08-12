@@ -1,5 +1,6 @@
 function validateEmail(email) {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+ const emailRegex =
+    /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
   return emailRegex.test(String(email).toLowerCase());
 }
 
@@ -16,9 +17,6 @@ function validatePassword(password) {
 function validateRegister({ name, email, password }) {
   const errors = {};
 
-  if (!name || typeof name !== "string" || name.trim().length < 3) {
-    errors.name = "Name is required and must be at least 3 characters.";
-  }
 
   if (!email || typeof email !== "string" || !validateEmail(email)) {
     errors.email = "A valid email address is required.";

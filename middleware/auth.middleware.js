@@ -3,7 +3,7 @@ const jwt = require("jsonwebtoken");
 // Token verify karo
 function verifyToken(req, res, next) {
   const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1]; // "Bearer TOKEN"
+  const token = authHeader && authHeader.split(" ")[1]; 
 
   if (!token) {
     return res.status(401).json({ message: "No token provided" });
@@ -25,5 +25,9 @@ function isAdmin(req, res, next) {
   }
   next();
 }
+
+
+
+
 
 module.exports = { verifyToken, isAdmin };

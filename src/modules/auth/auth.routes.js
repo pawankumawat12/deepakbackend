@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { register, registerAdmin, login } = require("./auth.controller");
+const { register, registerAdmin, login, sendotp } = require("./auth.controller");
 const { verifyToken, isAdmin } = require("../../../middleware/auth.middleware");
 const { countAdmins } = require("../../models/auth.model");
 
@@ -17,7 +17,7 @@ async function allowInitialAdmin(req, res, next) {
     return res.status(500).json({ message: "Server error" });
   }
 }
-
+router.post("/send-otp", sendotp);
 router.post("/register", register);
 router.post("/login", login);
 

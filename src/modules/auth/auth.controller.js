@@ -9,7 +9,40 @@ const {
   findUserByPhone,
   countAdmins,
   createUser,
+  sendOtp,
 } = require("../../models/auth.model");
+
+
+
+const sendotp = async (req, res) => {
+  try {
+    const { phone } = req.body;
+    const otp = Math.floor(Math.random() * 9999) + 1000;
+    if (!phone) {
+      return res.status(400).json({
+        message: "Phone number is required",
+      });
+    }
+
+    const result = await sendOtp({phone, otp});
+
+    return res.status(200).json({
+      message: "OTP sent successfully",
+      data: result,
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Failed to send OTP",
+    });
+  }
+};
+
+
+
+
+
 
 async function register(req, res) {
   try {
@@ -117,7 +150,7 @@ async function login(req, res) {
     if (!valid) {
       return res.status(400).json({ message: "Validation failed", errors });
     }
-let user ;
+  let user ;
     if (email) {
       user = await findUserByEmail(email);
 
@@ -160,4 +193,5 @@ let user ;
   }
 }
 
-module.exports = { register, registerAdmin, login };
+
+module.exports = {sendotp, register, registerAdmin, login };

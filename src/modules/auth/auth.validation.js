@@ -1,7 +1,12 @@
 function validateEmail(email) {
- const emailRegex =
+  const emailRegex =
     /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
   return emailRegex.test(String(email).toLowerCase());
+}
+
+function validatePhone(phone) {
+  if (typeof phone !== "string") return false;
+  return /^[6-9]\d{9}$/.test(phone);
 }
 
 function validatePassword(password) {
@@ -13,13 +18,26 @@ function validatePassword(password) {
   const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(password);
   return lengthOk && hasUpper && hasLower && hasNumber && hasSpecial;
 }
-
-function validateRegister({ name, email, password }) {
+function validateRegister({ name, email, phone, password }) {
   const errors = {};
+  if (!name || typeof name !== "string" || name.trim().length < 3) {
+    errors.name = "Name is required and must be at least 3 characters.";
+  }
 
+  const hasEmail = typeof email === "string" && email.trim() !== "";
+  const hasPhone = typeof phone === "string" && phone.trim() !== "";
 
-  if (!email || typeof email !== "string" || !validateEmail(email)) {
+  if (!hasEmail && !hasPhone) {
+    errors.email = "Either email or phone number is required.";
+    errors.phone = "Either email or phone number is required.";
+  }
+
+  if (hasEmail && !validateEmail(email.trim())) {
     errors.email = "A valid email address is required.";
+  }
+
+  if (hasPhone && !validatePhone(phone.trim())) {
+    errors.phone = "A valid 10-digit phone number is required.";
   }
 
   if (!password || !validatePassword(password)) {
@@ -32,13 +50,26 @@ function validateRegister({ name, email, password }) {
     errors,
   };
 }
-
-function validateLogin({ email, password }) {
+function validateLogin({ email, password, phone }) {
   const errors = {};
 
-  if (!email || typeof email !== "string" || !validateEmail(email)) {
+  
+  const hasEmail = typeof email === "string" && email.trim() !== "";
+  const hasPhone = typeof phone === "string" && phone.trim() !== "";
+
+  if (!hasEmail && !hasPhone) {
+    errors.email = "Either email or phone number is required.";
+    errors.phone = "Either email or phone number is required.";
+  }
+
+  if (hasEmail && !validateEmail(email.trim())) {
     errors.email = "A valid email address is required.";
   }
+
+  if (hasPhone && !validatePhone(phone.trim())) {
+    errors.phone = "A valid 10-digit phone number is required.";
+  }
+
 
   if (!password || typeof password !== "string" || password.length < 8) {
     errors.password = "Password is required and must be at least 8 characters.";

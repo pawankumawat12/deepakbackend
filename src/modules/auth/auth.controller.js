@@ -6,18 +6,19 @@ const {
 } = require("./auth.validation");
 const {
   findUserByEmail,
+  findUserByPhone,
   countAdmins,
   createUser,
 } = require("../../models/auth.model");
 
-// REGISTER (normal user)
 async function register(req, res) {
   try {
-    const { name, email, password } = req.body || {};
+    const { name, email, phone, password } = req.body || {};
 
     const { valid, errors } = validateRegister({
       name,
       email,
+      phone,
       password,
     });
 
@@ -28,19 +29,34 @@ async function register(req, res) {
       });
     }
 
-    const existingUser = await findUserByEmail(email);
+    // Check email if provided
+    if (email) {
+      const existingUser = await findUserByEmail(email);
 
-    if (existingUser) {
-      return res.status(400).json({
-        message: "Email already registered",
-      });
+      if (!existingUser) {
+        return res.status(400).json({
+          message: "Email already registered",
+        });
+      }
+    }
+
+    // Check phone if provided
+    if (phone) {
+      const existingUser = await findUserByPhone(phone);
+
+      if (!existingUser) {
+        return res.status(400).json({
+          message: "Phone number dosen't registered",
+        });
+      }
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = await createUser({
       name,
-      email,
+      email: email || null,
+      phone: phone || null,
       password: hashedPassword,
       role: "user",
     });
@@ -95,18 +111,33 @@ async function registerAdmin(req, res) {
 // LOGIN (common for user + admin)
 async function login(req, res) {
   try {
-    const { email, password } = req.body;
-    const { valid, errors } = validateLogin({ email, password });
+    const { email, phone, password } = req.body;
+    const { valid, errors } = validateLogin({ email, password, phone });
 
     if (!valid) {
       return res.status(400).json({ message: "Validation failed", errors });
     }
+let user ;
+    if (email) {
+      user = await findUserByEmail(email);
 
-    const user = await findUserByEmail(email);
-    if (!user) {
-      return res.status(400).json({ message: "Invalid credentials" });
+      if (!user) {
+        return res.status(400).json({
+          message: "Email dose not registered",
+        });
+      }
     }
 
+    // Check phone if provided
+    if (phone) {
+      user = await findUserByPhone(phone);
+
+      if (!user) {
+        return res.status(400).json({
+          message: "Phone number dose not registered",
+        });
+      }
+    }
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(400).json({ message: "Invalid credentials" });
@@ -121,7 +152,7 @@ async function login(req, res) {
     res.status(200).json({
       message: "Login successful",
       token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      user: { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role },
     });
   } catch (error) {
     console.error(error);

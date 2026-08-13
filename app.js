@@ -9,13 +9,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Test route
-app.get("/", (req, res) => {
-  res.json({
-    success: true,
-    message: "SFC Cafe API is running",
-  });
-});
 
 // Routes
 app.use("/api/v1/auth", authRoutes);

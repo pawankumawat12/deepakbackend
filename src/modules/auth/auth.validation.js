@@ -60,7 +60,7 @@ function validateLogin({ email, password, phone }) {
   if (!hasEmail && !hasPhone) {
     errors.email = "Either email or phone number is required.";
     errors.phone = "Either email or phone number is required.";
-  }
+  }``
 
   if (hasEmail && !validateEmail(email.trim())) {
     errors.email = "A valid email address is required.";

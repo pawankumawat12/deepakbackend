@@ -1,4 +1,5 @@
 const db = require("../../config/db");
+const transporter = require("../../config/mail");
 
 function findUserByEmail(email) {
   return db("users").where({ email }).first();
@@ -23,29 +24,28 @@ function createUser(data) {
     .then((rows) => rows[0]);
 }
 
-const sendOtp = async ({ phone, otp }) => {
+
+function updateUser(id, data) {
+  return db("users")
+    .where({ id })
+    .update(data)
+    .returning(["id", "name", "email", "phone", "role"]);
+}
+
+
+const sendOtp = async ({ email, otp }) => {
   try {
-    const response = await fetch(`https://2factor.in/API/V1/${process.env.TWO_FACTOR_API_KEY}/SMS/${phone}/${otp}`, {
-      method: "POST",
-      headers: {
-        "X-API-Key": process.env.TWO_FACTOR_API_KEY,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        to: `+91${phone}`,
-        template_name: "sfc cafe",
-        var1: otp,
-      }),
-    });
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: email,
+      subject: "Your OTP Verification Code",
+      text: `Your OTP is ${otp}. This OTP is valid for 5 minutes.`,
+    };
 
-    const data = await response.text();
-    if (!response.ok) {
-      throw new Error(`2Factor API failed: ${response.status} - ${data}`);
-    }
-
-    return JSON.parse(data);
+    const result = await transporter.sendMail(mailOptions);
+    return result;
   } catch (error) {
-    console.error("2Factor OTP error:", error);
+    console.error("Nodemailer OTP error:", error);
     throw error;
   }
 };
@@ -56,4 +56,5 @@ module.exports = {
   createUser,
   findUserByPhone,
   sendOtp,
+  updateUser
 };

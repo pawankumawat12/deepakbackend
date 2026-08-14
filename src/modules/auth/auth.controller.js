@@ -1,37 +1,52 @@
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const {
-  validateRegister,
-  validateLogin,
-} = require("./auth.validation");
+const { validateRegister, validateLogin } = require("./auth.validation");
 const {
   findUserByEmail,
   findUserByPhone,
   countAdmins,
   createUser,
   sendOtp,
+  updateUser,
 } = require("../../models/auth.model");
-
-
+const {
+  generateAccessToken,
+  generateRefreshToken,
+} = require("../../../config/helper");
 
 const sendotp = async (req, res) => {
   try {
-    const { phone } = req.body;
-    const otp = Math.floor(Math.random() * 9999) + 1000;
-    if (!phone) {
+    const { email } = req.body;
+
+    if (!email) {
       return res.status(400).json({
-        message: "Phone number is required",
+        message: "Email is required",
       });
     }
 
-    const result = await sendOtp({phone, otp});
+    const user = await findUserByEmail(email);
+
+    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+    const expireAt = new Date(Date.now() + 15 * 60 * 1000);
+
+    await updateUser(user.id, {
+      otp,
+      expire_at: expireAt,
+    });
+
+    const result = await sendOtp({
+      email,
+      otp,
+    });
 
     return res.status(200).json({
       message: "OTP sent successfully",
-      data: result,
+      data: {
+        messageId: result.messageId,
+      },
     });
   } catch (error) {
-    console.error(error);
+    console.error("Send OTP error:", error);
 
     return res.status(500).json({
       message: "Failed to send OTP",
@@ -39,11 +54,71 @@ const sendotp = async (req, res) => {
   }
 };
 
+const verifyOtp = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
 
+    if (!email || !otp) {
+      return res.status(400).json({
+        message: "Email and OTP are required",
+      });
+    }
 
+    const user = await findUserByEmail(email);
 
+    if (!user) {
+      return res.status(404).json({
+        message: "Email is not registered",
+      });
+    }
 
+    if (!user.expire_at || new Date() > new Date(user.expire_at)) {
+      return res.status(400).json({
+        message: "OTP expired",
+      });
+    }
 
+    if (user.otp !== otp) {
+      return res.status(400).json({
+        message: "Invalid OTP",
+      });
+    }
+
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
+
+    //store into cookie
+    res.cookie("accessToken", accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 15 * 60 * 1000,
+    });
+
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 30 * 24 * 60 * 1000,
+    });
+
+    await updateUser(user.id, {
+      otp: null,
+      expire_at: null,
+      access_token: accessToken,
+    });
+
+    return res.status(200).json({
+      message: "OTP verified successfully",
+    });
+  } catch (error) {
+    console.error("Verify OTP error:", error);
+
+    return res.status(500).json({
+      message: "Failed to verify OTP",
+    });
+  }
+};
 async function register(req, res) {
   try {
     const { name, email, phone, password } = req.body || {};
@@ -118,7 +193,9 @@ async function registerAdmin(req, res) {
 
     const adminCount = await countAdmins();
     if (adminCount > 0) {
-      return res.status(403).json({ message: "Only one admin account is allowed." });
+      return res
+        .status(403)
+        .json({ message: "Only one admin account is allowed." });
     }
 
     const existingUser = await findUserByEmail(email);
@@ -150,7 +227,7 @@ async function login(req, res) {
     if (!valid) {
       return res.status(400).json({ message: "Validation failed", errors });
     }
-  let user ;
+    let user;
     if (email) {
       user = await findUserByEmail(email);
 
@@ -185,7 +262,13 @@ async function login(req, res) {
     res.status(200).json({
       message: "Login successful",
       token,
-      user: { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role },
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+      },
     });
   } catch (error) {
     console.error(error);
@@ -193,5 +276,4 @@ async function login(req, res) {
   }
 }
 
-
-module.exports = {sendotp, register, registerAdmin, login };
+module.exports = { sendotp, register, registerAdmin, login, verifyOtp };

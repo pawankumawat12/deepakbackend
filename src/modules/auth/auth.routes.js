@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { register, registerAdmin, login, sendotp } = require("./auth.controller");
+const { register, registerAdmin, login, sendotp, verifyOtp } = require("./auth.controller");
 const { verifyToken, isAdmin } = require("../../../middleware/auth.middleware");
 const { countAdmins } = require("../../models/auth.model");
 
@@ -20,6 +20,7 @@ async function allowInitialAdmin(req, res, next) {
 router.post("/send-otp", sendotp);
 router.post("/register", register);
 router.post("/login", login);
+router.post('/verify-otp', verifyOtp)
 
 // Register admin: allow first admin without auth, then require admin token.
 router.post("/register-admin", allowInitialAdmin, registerAdmin);

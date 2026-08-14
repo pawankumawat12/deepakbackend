@@ -13,7 +13,7 @@ function verifyToken(req, res, next) {
     if (err) {
       return res.status(403).json({ message: "Invalid or expired token" });
     }
-    req.user = decoded; // { id, email, role }
+    req.user = decoded;
     next();
   });
 }

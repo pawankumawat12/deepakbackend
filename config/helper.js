@@ -5,7 +5,7 @@ const generateAccessToken = (user) => {
     {
       id: user.id,
     },
-    process.env.REFRESH_TOKEN_SECRET,
+    process.env.ACCESS_TOKEN_SECRET,
     {
       expiresIn: "30m",
     }

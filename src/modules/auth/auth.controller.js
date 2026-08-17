@@ -4,6 +4,7 @@ const { validateRegister, validateLogin } = require("./auth.validation");
 const {
   findUserByEmail,
   findUserByPhone,
+  findUserById,
   countAdmins,
   createUser,
   sendOtp,
@@ -141,7 +142,7 @@ async function register(req, res) {
     if (email) {
       const existingUser = await findUserByEmail(email);
 
-      if (!existingUser) {
+      if (existingUser) {
         return res.status(400).json({
           message: "Email already registered",
         });
@@ -152,7 +153,7 @@ async function register(req, res) {
     if (phone) {
       const existingUser = await findUserByPhone(phone);
 
-      if (!existingUser) {
+      if (existingUser) {
         return res.status(400).json({
           message: "Phone number dosen't registered",
         });
@@ -255,7 +256,7 @@ async function login(req, res) {
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET,
+      process.env.ACCESS_TOKEN_SECRET,
       { expiresIn: "7d" }
     );
 
@@ -276,4 +277,53 @@ async function login(req, res) {
   }
 }
 
-module.exports = { sendotp, register, registerAdmin, login, verifyOtp };
+//refresh token api
+const refreshAccessToken = async (req, res) => {
+  try {
+    const refreshToken = req.cookies.refreshToken;
+
+    if (!refreshToken) {
+      return res.status(401).json({
+        message: "Refresh token not found",
+      });
+    }
+
+    const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
+
+    const user = await findUserById(decoded.id);
+
+    if (!user) {
+      return res.status(401).json({
+        message: "User not found",
+      });
+    }
+
+    const newAccessToken = generateAccessToken(user);
+
+    res.cookie("accessToken", newAccessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 15 * 60 * 1000,
+    });
+
+    return res.status(200).json({
+      message: "Access token refreshed",
+    });
+  } catch (error) {
+    console.error("Refresh token error:", error);
+
+    return res.status(401).json({
+      message: "Invalid or expired refresh token",
+    });
+  }
+};
+
+module.exports = {
+  sendotp,
+  register,
+  registerAdmin,
+  login,
+  verifyOtp,
+  refreshAccessToken,
+};

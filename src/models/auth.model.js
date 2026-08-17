@@ -9,6 +9,10 @@ function findUserByPhone(phone) {
   return db("users").where({ phone }).first();
 }
 
+function findUserById(id){
+  return db("users").where({id}).first();
+}
+
 function countAdmins() {
   return db("users")
     .where({ role: "admin" })
@@ -56,5 +60,6 @@ module.exports = {
   createUser,
   findUserByPhone,
   sendOtp,
-  updateUser
+  updateUser,
+  findUserById
 };

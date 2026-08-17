@@ -27,6 +27,10 @@ const sendotp = async (req, res) => {
 
     const user = await findUserByEmail(email);
 
+    if (!user) {
+      return res.status(404).json({ message: "Email is not registered" });
+    }
+
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
     const expireAt = new Date(Date.now() + 15 * 60 * 1000);
 
@@ -111,6 +115,13 @@ const verifyOtp = async (req, res) => {
 
     return res.status(200).json({
       message: "OTP verified successfully",
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+      },
     });
   } catch (error) {
     console.error("Verify OTP error:", error);
@@ -254,15 +265,26 @@ async function login(req, res) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
-      process.env.ACCESS_TOKEN_SECRET,
-      { expiresIn: "7d" }
-    );
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
+
+    res.cookie("accessToken", accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 15 * 60 * 1000,
+    });
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+    });
+
+    await updateUser(user.id, { access_token: accessToken });
 
     res.status(200).json({
       message: "Login successful",
-      token,
       user: {
         id: user.id,
         name: user.name,
@@ -309,6 +331,13 @@ const refreshAccessToken = async (req, res) => {
 
     return res.status(200).json({
       message: "Access token refreshed",
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+      },
     });
   } catch (error) {
     console.error("Refresh token error:", error);

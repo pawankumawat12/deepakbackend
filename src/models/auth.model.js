@@ -13,6 +13,14 @@ function findUserById(id){
   return db("users").where({id}).first();
 }
 
+function findPendingRegistrationByEmail(email) {
+  return db("pending_registrations").where({ email }).first();
+}
+
+function findPendingRegistrationByPhone(phone) {
+  return db("pending_registrations").where({ phone }).first();
+}
+
 function countAdmins() {
   return db("users")
     .where({ role: "admin" })
@@ -34,6 +42,27 @@ function updateUser(id, data) {
     .where({ id })
     .update(data)
     .returning(["id", "name", "email", "phone", "role"]);
+}
+
+function savePendingRegistration(data) {
+  return db("pending_registrations")
+    .insert(data)
+    .onConflict("email")
+    .merge(data)
+    .returning(["id", "name", "email", "phone", "password", "otp", "expire_at"])
+    .then((rows) => rows[0]);
+}
+
+function updatePendingRegistration(id, data) {
+  return db("pending_registrations")
+    .where({ id })
+    .update(data)
+    .returning(["id", "name", "email", "phone", "password", "otp", "expire_at"])
+    .then((rows) => rows[0]);
+}
+
+function deletePendingRegistration(id) {
+  return db("pending_registrations").where({ id }).del();
 }
 
 
@@ -61,5 +90,10 @@ module.exports = {
   findUserByPhone,
   sendOtp,
   updateUser,
-  findUserById
+  findUserById,
+  findPendingRegistrationByEmail,
+  findPendingRegistrationByPhone,
+  savePendingRegistration,
+  updatePendingRegistration,
+  deletePendingRegistration,
 };

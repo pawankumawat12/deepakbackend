@@ -7,6 +7,7 @@ const {
   sendotp,
   verifyOtp,
   refreshAccessToken,
+  logout,
 } = require("./auth.controller");
 const { verifyToken, isAdmin } = require("../../../middleware/auth.middleware");
 const { countAdmins } = require("../../models/auth.model");
@@ -31,6 +32,7 @@ router.post("/register", register);
 router.post("/login", login);
 router.post("/verify-otp", verifyOtp);
 router.post("/refresh-token", refreshAccessToken);
+router.post("/logout", logout);
 // Register admin: allow first admin without auth, then require admin token.
 router.post("/register-admin", allowInitialAdmin, registerAdmin);
 

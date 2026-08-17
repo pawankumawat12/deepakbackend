@@ -9,11 +9,29 @@ const {
   createUser,
   sendOtp,
   updateUser,
+  findPendingRegistrationByEmail,
+  findPendingRegistrationByPhone,
+  savePendingRegistration,
+  updatePendingRegistration,
+  deletePendingRegistration,
 } = require("../../models/auth.model");
 const {
   generateAccessToken,
   generateRefreshToken,
 } = require("../../../config/helper");
+
+const issueVerificationOtp = async (registration, email, updateRegistration) => {
+  const otp = Math.floor(1000 + Math.random() * 9000).toString();
+  // Keep the existing OTP lifetime unchanged.
+  const expireAt = new Date(Date.now() + 15 * 60 * 1000);
+
+  await updateRegistration(registration.id, {
+    otp,
+    expire_at: expireAt,
+  });
+
+  return sendOtp({ email, otp });
+};
 
 const sendotp = async (req, res) => {
   try {
@@ -26,23 +44,21 @@ const sendotp = async (req, res) => {
     }
 
     const user = await findUserByEmail(email);
+    const pendingRegistration = await findPendingRegistrationByEmail(email);
 
-    if (!user) {
+    if (!pendingRegistration && !user) {
       return res.status(404).json({ message: "Email is not registered" });
     }
 
-    const otp = Math.floor(1000 + Math.random() * 9000).toString();
-    const expireAt = new Date(Date.now() + 15 * 60 * 1000);
-
-    await updateUser(user.id, {
-      otp,
-      expire_at: expireAt,
-    });
-
-    const result = await sendOtp({
+    const registration = pendingRegistration || user;
+    const updateRegistration = pendingRegistration
+      ? updatePendingRegistration
+      : updateUser;
+    const result = await issueVerificationOtp(
+      registration,
       email,
-      otp,
-    });
+      updateRegistration,
+    );
 
     return res.status(200).json({
       message: "OTP sent successfully",
@@ -69,24 +85,41 @@ const verifyOtp = async (req, res) => {
       });
     }
 
-    const user = await findUserByEmail(email);
+    let user = await findUserByEmail(email);
+    const pendingRegistration = user
+      ? null
+      : await findPendingRegistrationByEmail(email);
 
-    if (!user) {
+    if (!user && !pendingRegistration) {
       return res.status(404).json({
         message: "Email is not registered",
       });
     }
 
-    if (!user.expire_at || new Date() > new Date(user.expire_at)) {
+    const registration = user || pendingRegistration;
+
+    if (!registration.expire_at || new Date() > new Date(registration.expire_at)) {
       return res.status(400).json({
         message: "OTP expired",
       });
     }
 
-    if (user.otp !== otp) {
+    if (registration.otp !== otp) {
       return res.status(400).json({
         message: "Invalid OTP",
       });
+    }
+
+    if (!user) {
+      user = await createUser({
+        name: pendingRegistration.name,
+        email: pendingRegistration.email,
+        phone: pendingRegistration.phone,
+        password: pendingRegistration.password,
+        role: "user",
+        is_email_verified: true,
+      });
+      await deletePendingRegistration(pendingRegistration.id);
     }
 
     const accessToken = generateAccessToken(user);
@@ -111,6 +144,7 @@ const verifyOtp = async (req, res) => {
       otp: null,
       expire_at: null,
       access_token: accessToken,
+      is_email_verified: true,
     });
 
     return res.status(200).json({
@@ -149,11 +183,23 @@ async function register(req, res) {
       });
     }
 
-    // Check email if provided
     if (email) {
       const existingUser = await findUserByEmail(email);
 
       if (existingUser) {
+        // Support registrations left unverified by the previous flow without
+        // creating a second account. New registrations are stored only in
+        // pending_registrations until their OTP is verified.
+        if (!existingUser.is_email_verified) {
+          const result = await issueVerificationOtp(existingUser, email, updateUser);
+          return res.status(200).json({
+            message: "Verification OTP sent successfully",
+            data: {
+              messageId: result.messageId,
+            },
+          });
+        }
+
         return res.status(400).json({
           message: "Email already registered",
         });
@@ -163,8 +209,9 @@ async function register(req, res) {
     // Check phone if provided
     if (phone) {
       const existingUser = await findUserByPhone(phone);
+      const pendingRegistration = await findPendingRegistrationByPhone(phone);
 
-      if (existingUser) {
+      if (existingUser || (pendingRegistration && pendingRegistration.email !== email)) {
         return res.status(400).json({
           message: "Phone number dosen't registered",
         });
@@ -173,17 +220,24 @@ async function register(req, res) {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const user = await createUser({
+    const pendingRegistration = await savePendingRegistration({
       name,
       email: email || null,
       phone: phone || null,
       password: hashedPassword,
-      role: "user",
     });
+
+    const result = await issueVerificationOtp(
+      pendingRegistration,
+      email,
+      updatePendingRegistration,
+    );
 
     return res.status(201).json({
       message: "User registered successfully",
-      user,
+      data: {
+        messageId: result.messageId,
+      },
     });
   } catch (error) {
     console.error(error);
@@ -221,6 +275,7 @@ async function registerAdmin(req, res) {
       email,
       password: hashedPassword,
       role: "admin",
+      is_email_verified: true,
     });
 
     res.status(201).json({ message: "Admin registered successfully", admin });
@@ -263,6 +318,12 @@ async function login(req, res) {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(400).json({ message: "Invalid credentials" });
+    }
+
+    if (!user.is_email_verified) {
+      return res.status(403).json({
+        message: "Please verify your email before logging in",
+      });
     }
 
     const accessToken = generateAccessToken(user);
@@ -348,6 +409,18 @@ const refreshAccessToken = async (req, res) => {
   }
 };
 
+const logout = (req, res) => {
+  const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+  };
+
+  res.clearCookie("accessToken", cookieOptions);
+  res.clearCookie("refreshToken", cookieOptions);
+  return res.status(200).json({ message: "Logged out successfully" });
+};
+
 module.exports = {
   sendotp,
   register,
@@ -355,4 +428,5 @@ module.exports = {
   login,
   verifyOtp,
   refreshAccessToken,
+  logout,
 };

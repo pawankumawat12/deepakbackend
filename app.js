@@ -1,6 +1,8 @@
 const express = require("express");
 const cors = require("cors");
 const authRoutes = require("./src/modules/auth/auth.routes");
+const categoryRoutes = require("./src/modules/category/category.routes");
+const productRoutes = require("./src/modules/product/product.routes");
 const cookieParser = require("cookie-parser");
 
 const app = express();
@@ -15,6 +17,8 @@ app.use(express.urlencoded({ extended: true }));
 
 
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/categories", categoryRoutes);
+app.use("/api/v1/products", productRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

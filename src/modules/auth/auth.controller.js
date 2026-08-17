@@ -4,6 +4,7 @@ const { validateRegister, validateLogin } = require("./auth.validation");
 const {
   findUserByEmail,
   findUserByPhone,
+  findUserById,
   countAdmins,
   createUser,
   sendOtp,
@@ -50,7 +51,7 @@ const sendotp = async (req, res) => {
 
     return res.status(500).json({
       message: "Failed to send OTP",
-    }); 
+    });
   }
 };
 
@@ -141,7 +142,7 @@ async function register(req, res) {
     if (email) {
       const existingUser = await findUserByEmail(email);
 
-      if (!existingUser) {
+      if (existingUser) {
         return res.status(400).json({
           message: "Email already registered",
         });
@@ -152,7 +153,7 @@ async function register(req, res) {
     if (phone) {
       const existingUser = await findUserByPhone(phone);
 
-      if (!existingUser) {
+      if (existingUser) {
         return res.status(400).json({
           message: "Phone number dosen't registered",
         });
@@ -255,7 +256,7 @@ async function login(req, res) {
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET,
+      process.env.ACCESS_TOKEN_SECRET,
       { expiresIn: "7d" }
     );
 
@@ -287,10 +288,7 @@ const refreshAccessToken = async (req, res) => {
       });
     }
 
-    const decoded = jwt.verify(
-      refreshToken,
-      process.env.REFRESH_TOKEN_SECRET
-    );
+    const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
 
     const user = await findUserById(decoded.id);
 
@@ -321,4 +319,11 @@ const refreshAccessToken = async (req, res) => {
   }
 };
 
-module.exports = { sendotp, register, registerAdmin, login, verifyOtp, refreshAccessToken };
+module.exports = {
+  sendotp,
+  register,
+  registerAdmin,
+  login,
+  verifyOtp,
+  refreshAccessToken,
+};

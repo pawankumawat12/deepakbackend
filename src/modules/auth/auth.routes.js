@@ -30,7 +30,7 @@ router.post("/send-otp", sendotp);
 router.post("/register", register);
 router.post("/login", login);
 router.post("/verify-otp", verifyOtp);
-router.post("/refresh-token",verifyToken, refreshAccessToken);
+router.post("/refresh-token", refreshAccessToken);
 // Register admin: allow first admin without auth, then require admin token.
 router.post("/register-admin", allowInitialAdmin, registerAdmin);
 

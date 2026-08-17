@@ -12,7 +12,7 @@ function verifyToken(req, res, next) {
 
   jwt.verify(
     accessToken,
-    process.env.JWT_ACCESS_SECRET,
+    process.env.ACCESS_TOKEN_SECRET,
     (err, decoded) => {
       if (err) {
         return res.status(401).json({

@@ -86,7 +86,7 @@ function validateCategoryCreate({ name, description, image, parentCategoryId, is
   };
 }
 
-function validateCategoryUpdate({ name, description, parentCategoryId, isActive }) {
+function validateCategoryUpdate({ name, description, image, parentCategoryId, isActive }) {
   const errors = {};
   const data = {};
 
@@ -107,6 +107,14 @@ function validateCategoryUpdate({ name, description, parentCategoryId, isActive 
       errors.description = "Description must not exceed 2000 characters.";
     } else {
       data.description = description === null ? null : description.trim();
+    }
+  }
+
+  if (image !== undefined) {
+    if (typeof image !== "string" || image.length === 0) {
+      errors.image = "Image must be a valid uploaded image.";
+    } else {
+      data.image = image;
     }
   }
 

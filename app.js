@@ -1,4 +1,5 @@
 const express = require("express");
+const path = require("path");
 const cors = require("cors");
 const authRoutes = require("./src/modules/auth/auth.routes");
 const categoryRoutes = require("./src/modules/category/category.routes");
@@ -14,6 +15,7 @@ app.use(cors({
 app.use(express.json());
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
+app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
 
 app.use("/api/v1/auth", authRoutes);

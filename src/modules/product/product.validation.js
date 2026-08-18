@@ -52,8 +52,8 @@ function validateProductCreate({
     }
   }
 
-  if (images.lenght <= 0) {
-    errors.images = "At list one image is required.";
+  if (!Array.isArray(images) || images.length === 0) {
+    errors.images = "At least one image is required.";
   }
   const parsedPrice = validatePrice(price);
   if (parsedPrice === null) {
@@ -90,6 +90,7 @@ function validateProductCreate({
           : String(description).trim(),
       price: parsedPrice,
       stock: parsedStock,
+      images,
       category_id: parsedCategoryId,
       is_active: parsedIsActive === undefined ? true : parsedIsActive,
     },
@@ -107,9 +108,13 @@ function validateProductUpdate({
 }) {
   const errors = {};
   const data = {};
-if(images.length <= 0){
-  errors.images = "At list one image is required."
-}
+
+  // No uploaded files means retain the existing product images on update.
+  if (!Array.isArray(images)) {
+    errors.images = "Images must be an array.";
+  } else if (images.length > 0) {
+    data.images = images;
+  }
   if (name !== undefined) {
     if (typeof name !== "string" || name.trim().length < 2) {
       errors.name = "Name must be at least 2 characters.";

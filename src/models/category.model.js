@@ -4,6 +4,7 @@ const CATEGORY_COLUMNS = [
   "id",
   "name",
   "description",
+  "image",
   "parent_category_id",
   "is_active",
   "created_at",

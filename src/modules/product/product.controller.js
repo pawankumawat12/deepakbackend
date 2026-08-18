@@ -89,7 +89,7 @@ async function createProductHandler(req, res) {
     const { name, description, price, stock, categoryId, isActive } =
       req.body || {};
 
-    const images = req.files.map((file) => `/uploads/${file.filename}`);
+    const images = (req.files || []).map((file) => `/uploads/${file.filename}`);
     const { valid, errors, data } = validateProductCreate({
       name,
       description,
@@ -148,7 +148,7 @@ async function updateProductHandler(req, res) {
 
     const { name, description, price, stock, categoryId, isActive } =
       req.body || {};
-    const images = req.files.map((file) => `/uploads/${file.filename}`);
+    const images = (req.files || []).map((file) => `/uploads/${file.filename}`);
     const { valid, errors, data } = validateProductUpdate({
       name,
       description,

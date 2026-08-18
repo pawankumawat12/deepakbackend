@@ -2,7 +2,8 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
-const uploadDir = path.join(process.cwd(), "../uploads");
+// Keep uploads in one predictable location regardless of where `node` is run.
+const uploadDir = path.join(__dirname, "..", "uploads");
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });

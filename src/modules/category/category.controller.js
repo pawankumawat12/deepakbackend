@@ -105,7 +105,6 @@ async function createCategoryHandler(req, res) {
         });
       }
     }
-console.log(data, 'check data ')
     const category = await createCategory(data);
 
     return res.status(201).json({

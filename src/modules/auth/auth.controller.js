@@ -7,34 +7,104 @@ const {
   findUserById,
   countAdmins,
   createUser,
-  sendOtp,
+  sendOtp: sendOtpEmail,
   updateUser,
-  findPendingRegistrationByEmail,
-  findPendingRegistrationByPhone,
-  savePendingRegistration,
-  updatePendingRegistration,
-  deletePendingRegistration,
 } = require("../../models/auth.model");
 const {
   generateAccessToken,
   generateRefreshToken,
 } = require("../../../config/helper");
 
+const OTP_RESEND_COOLDOWN_MS = 30 * 1000;
+const OTP_RESEND_LIMIT = 4;
+const OTP_RESEND_LOCK_MS = 10 * 60 * 1000;
+
+const secondsRemaining = (date) =>
+  Math.max(1, Math.ceil((new Date(date).getTime() - Date.now()) / 1000));
+
 const issueVerificationOtp = async (
   registration,
   email,
-  updateRegistration
+  updateRegistration,
+  { resetResendPolicy = false } = {}
 ) => {
   const otp = Math.floor(1000 + Math.random() * 9000).toString();
   // Keep the existing OTP lifetime unchanged.
   const expireAt = new Date(Date.now() + 15 * 60 * 1000);
 
+  const now = new Date();
   await updateRegistration(registration.id, {
     otp,
     expire_at: expireAt,
+    otp_sent_at: now,
+    ...(resetResendPolicy
+      ? { otp_resend_count: 0, otp_resend_locked_until: null }
+      : {}),
   });
 
-  return sendOtp({ email, otp });
+  return sendOtpEmail({ email, otp });
+};
+
+const resendVerificationOtp = async (registration, email, updateRegistration) => {
+  const now = new Date();
+
+  if (
+    registration.otp_resend_locked_until &&
+    new Date(registration.otp_resend_locked_until) > now
+  ) {
+    const retryAfter = secondsRemaining(registration.otp_resend_locked_until);
+    const error = new Error(`Resend limit reached. Try again in ${retryAfter} seconds.`);
+    error.status = 429;
+    error.retryAfter = retryAfter;
+    error.lockedUntil = registration.otp_resend_locked_until;
+    throw error;
+  }
+
+  let resendCount = Number(registration.otp_resend_count || 0);
+  if (
+    registration.otp_resend_locked_until &&
+    new Date(registration.otp_resend_locked_until) <= now
+  ) {
+    resendCount = 0;
+  }
+
+  if (registration.otp_sent_at) {
+    const nextAllowedAt = new Date(
+      new Date(registration.otp_sent_at).getTime() + OTP_RESEND_COOLDOWN_MS
+    );
+    if (nextAllowedAt > now) {
+      const retryAfter = secondsRemaining(nextAllowedAt);
+      const error = new Error(`Please wait ${retryAfter} seconds before resending the OTP.`);
+      error.status = 429;
+      error.retryAfter = retryAfter;
+      throw error;
+    }
+  }
+
+  if (resendCount >= OTP_RESEND_LIMIT) {
+    const lockedUntil = new Date(now.getTime() + OTP_RESEND_LOCK_MS);
+    await updateRegistration(registration.id, {
+      otp_resend_locked_until: lockedUntil,
+    });
+    const error = new Error("You have used all 4 resend attempts. Try again in 10 minutes.");
+    error.status = 429;
+    error.retryAfter = Math.ceil(OTP_RESEND_LOCK_MS / 1000);
+    error.lockedUntil = lockedUntil;
+    throw error;
+  }
+
+  const otp = Math.floor(1000 + Math.random() * 9000).toString();
+  const expireAt = new Date(now.getTime() + 15 * 60 * 1000);
+  const nextCount = resendCount + 1;
+  await updateRegistration(registration.id, {
+    otp,
+    expire_at: expireAt,
+    otp_sent_at: now,
+    otp_resend_count: nextCount,
+    otp_resend_locked_until: null,
+  });
+  const result = await sendOtpEmail({ email, otp });
+  return { result, resendCount: nextCount, attemptsRemaining: OTP_RESEND_LIMIT - nextCount };
 };
 
 const forgotPassword = async (req, res) => {
@@ -53,7 +123,7 @@ const forgotPassword = async (req, res) => {
     const resetUrl = `${
       process.env.ADMIN_URL || "http://localhost:5173"
     }/reset-password/${resetToken}`;
-    await sendOtp({
+    await sendOtpEmail({
       email,
       otp: `Reset your password using this link: ${resetUrl}`,
     });
@@ -98,7 +168,7 @@ const resetPassword = async (req, res) => {
   }
 };
 
-const sendotp = async (req, res) => {
+const sendOtp = async (req, res) => {
   try {
     const { email } = req.body;
 
@@ -109,33 +179,33 @@ const sendotp = async (req, res) => {
     }
 
     const user = await findUserByEmail(email);
-    const pendingRegistration = await findPendingRegistrationByEmail(email);
 
-    if (!pendingRegistration && !user) {
+    if (!user) {
       return res.status(404).json({ message: "Email is not registered" });
     }
 
-    const registration = pendingRegistration || user;
-    const updateRegistration = pendingRegistration
-      ? updatePendingRegistration
-      : updateUser;
-    const result = await issueVerificationOtp(
-      registration,
+    const resend = await resendVerificationOtp(
+      user,
       email,
-      updateRegistration
+      updateUser
     );
 
     return res.status(200).json({
-      message: "OTP sent successfully",
+      message: "OTP resent successfully",
       data: {
-        messageId: result.messageId,
+        messageId: resend.result.messageId,
+        resendCount: resend.resendCount,
+        attemptsRemaining: resend.attemptsRemaining,
+        retryAfter: OTP_RESEND_COOLDOWN_MS / 1000,
       },
     });
   } catch (error) {
     console.error("Send OTP error:", error);
 
-    return res.status(500).json({
-      message: "Failed to send OTP",
+    return res.status(error.status || 500).json({
+      message: error.message || "Failed to send OTP",
+      retryAfter: error.retryAfter,
+      lockedUntil: error.lockedUntil,
     });
   }
 };
@@ -150,44 +220,27 @@ const verifyOtp = async (req, res) => {
       });
     }
 
-    let user = await findUserByEmail(email);
-    const pendingRegistration = user
-      ? null
-      : await findPendingRegistrationByEmail(email);
+    const user = await findUserByEmail(email);
 
-    if (!user && !pendingRegistration) {
+    if (!user) {
       return res.status(404).json({
         message: "Email is not registered",
       });
     }
 
-    const registration = user || pendingRegistration;
-
     if (
-      !registration.expire_at ||
-      new Date() > new Date(registration.expire_at)
+      !user.expire_at ||
+      new Date() > new Date(user.expire_at)
     ) {
       return res.status(400).json({
         message: "OTP expired",
       });
     }
 
-    if (registration.otp !== otp) {
+    if (user.otp !== otp) {
       return res.status(400).json({
         message: "Invalid OTP",
       });
-    }
-
-    if (!user) {
-      user = await createUser({
-        name: pendingRegistration.name,
-        email: pendingRegistration.email,
-        phone: pendingRegistration.phone,
-        password: pendingRegistration.password,
-        role: "user",
-        is_email_verified: true,
-      });
-      await deletePendingRegistration(pendingRegistration.id);
     }
 
     const accessToken = generateAccessToken(user);
@@ -255,23 +308,6 @@ async function register(req, res) {
       const existingUser = await findUserByEmail(email);
 
       if (existingUser) {
-        // Support registrations left unverified by the previous flow without
-        // creating a second account. New registrations are stored only in
-        // pending_registrations until their OTP is verified.
-        if (!existingUser.is_email_verified) {
-          const result = await issueVerificationOtp(
-            existingUser,
-            email,
-            updateUser
-          );
-          return res.status(200).json({
-            message: "Verification OTP sent successfully",
-            data: {
-              messageId: result.messageId,
-            },
-          });
-        }
-
         return res.status(400).json({
           message: "Email already registered",
         });
@@ -281,12 +317,8 @@ async function register(req, res) {
     // Check phone if provided
     if (phone) {
       const existingUser = await findUserByPhone(phone);
-      const pendingRegistration = await findPendingRegistrationByPhone(phone);
 
-      if (
-        existingUser ||
-        (pendingRegistration && pendingRegistration.email !== email)
-      ) {
+      if (existingUser) {
         return res.status(400).json({
           message: "Phone number dosen't registered",
         });
@@ -295,17 +327,20 @@ async function register(req, res) {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const pendingRegistration = await savePendingRegistration({
+    const user = await createUser({
       name,
       email: email || null,
       phone: phone || null,
       password: hashedPassword,
+      role: "user",
+      is_email_verified: false,
     });
 
     const result = await issueVerificationOtp(
-      pendingRegistration,
+      user,
       email,
-      updatePendingRegistration
+      updateUser,
+      { resetResendPolicy: true }
     );
 
     return res.status(201).json({
@@ -450,7 +485,7 @@ async function adminLogin(req, res) {
       !(await bcrypt.compare(password, admin.password))
     )
       return res.status(401).json({ message: "Invalid admin credentials" });
-    const result = await issueVerificationOtp(admin, email, updateUser);
+  const result = await issueVerificationOtp(admin, email, updateUser);
     return res
       .status(200)
       .json({
@@ -527,7 +562,7 @@ const logout = (req, res) => {
 module.exports = {
   forgotPassword,
   resetPassword,
-  sendotp,
+  sendOtp,
   register,
   registerAdmin,
   login,

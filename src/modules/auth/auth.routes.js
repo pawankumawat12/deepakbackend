@@ -5,7 +5,7 @@ const {
   registerAdmin,
   login,
   adminLogin,
-  sendotp,
+  sendOtp,
   verifyOtp,
   refreshAccessToken,
   logout,
@@ -32,8 +32,7 @@ async function allowInitialAdmin(req, res, next) {
   }
 }
 
-router.post("/send-otp", sendotp);
-router.post("/resend-otp", sendotp);
+router.post("/send-otp", sendOtp);
 router.post("/forgot-password", forgotPassword);
 router.post("/reset-password/:accessToken", resetPassword);
 router.post("/register", register);

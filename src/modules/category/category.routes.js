@@ -7,13 +7,14 @@ const {
   updateCategoryHandler,
   deleteCategoryHandler,
 } = require("./category.controller");
+const { uploadImage } = require("../../../middleware/upload");
 
 const router = express.Router();
 
-router.get("/", verifyToken, listCategories);
-router.get("/:id", verifyToken, getCategoryById);
-router.post("/", verifyToken, isAdmin, createCategoryHandler);
-router.put("/:id", verifyToken, isAdmin, updateCategoryHandler);
+router.get("/",  listCategories);
+router.get("/:id", getCategoryById);
+router.post("/", verifyToken, isAdmin, uploadImage.single("image"), createCategoryHandler);
+router.put("/:id", verifyToken, isAdmin,uploadImage.single("image"), updateCategoryHandler);
 router.delete("/:id", verifyToken, isAdmin, deleteCategoryHandler);
 
 module.exports = router;

@@ -88,11 +88,14 @@ async function createProductHandler(req, res) {
   try {
     const { name, description, price, stock, categoryId, isActive } =
       req.body || {};
+
+    const images = req.files.map((file) => `/uploads/${file.filename}`);
     const { valid, errors, data } = validateProductCreate({
       name,
       description,
       price,
       stock,
+      images,
       categoryId,
       isActive,
     });
@@ -145,11 +148,13 @@ async function updateProductHandler(req, res) {
 
     const { name, description, price, stock, categoryId, isActive } =
       req.body || {};
+    const images = req.files.map((file) => `/uploads/${file.filename}`);
     const { valid, errors, data } = validateProductUpdate({
       name,
       description,
       price,
       stock,
+      images,
       categoryId,
       isActive,
     });

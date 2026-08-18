@@ -31,6 +31,7 @@ function validateProductCreate({
   name,
   description,
   price,
+  images,
   stock,
   categoryId,
   isActive,
@@ -51,6 +52,9 @@ function validateProductCreate({
     }
   }
 
+  if (images.lenght <= 0) {
+    errors.images = "At list one image is required.";
+  }
   const parsedPrice = validatePrice(price);
   if (parsedPrice === null) {
     errors.price = "Price is required and must be a non-negative number.";
@@ -66,7 +70,8 @@ function validateProductCreate({
 
   const parsedCategoryId = Number(categoryId);
   if (!Number.isInteger(parsedCategoryId) || parsedCategoryId <= 0) {
-    errors.categoryId = "Category ID is required and must be a positive integer.";
+    errors.categoryId =
+      "Category ID is required and must be a positive integer.";
   }
 
   const parsedIsActive = parseOptionalBoolean(isActive);
@@ -96,12 +101,15 @@ function validateProductUpdate({
   description,
   price,
   stock,
+  images,
   categoryId,
   isActive,
 }) {
   const errors = {};
   const data = {};
-
+if(images.length <= 0){
+  errors.images = "At list one image is required."
+}
   if (name !== undefined) {
     if (typeof name !== "string" || name.trim().length < 2) {
       errors.name = "Name must be at least 2 characters.";

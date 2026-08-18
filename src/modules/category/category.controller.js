@@ -79,10 +79,13 @@ async function getCategoryById(req, res) {
 
 async function createCategoryHandler(req, res) {
   try {
-    const { name, description, parentCategoryId, isActive } = req.body || {};
+    const { name, description, parentCategoryId, isActive } = req.body;
+    const image = req.file ? `/uploads/${req.file.filename}` : undefined;
+
     const { valid, errors, data } = validateCategoryCreate({
       name,
       description,
+      image,
       parentCategoryId,
       isActive,
     });
@@ -102,7 +105,7 @@ async function createCategoryHandler(req, res) {
         });
       }
     }
-
+console.log(data, 'check data ')
     const category = await createCategory(data);
 
     return res.status(201).json({
@@ -128,10 +131,12 @@ async function updateCategoryHandler(req, res) {
     }
 
     const { name, description, parentCategoryId, isActive } = req.body || {};
+    const image = req.file ? `/uploads/${req.file.filename}` : undefined;
     const { valid, errors, data } = validateCategoryUpdate({
       name,
       description,
       parentCategoryId,
+      image,
       isActive,
     });
 
@@ -157,7 +162,10 @@ async function updateCategoryHandler(req, res) {
           });
         }
 
-        const createsCycle = await isCategoryAncestor(id, data.parent_category_id);
+        const createsCycle = await isCategoryAncestor(
+          id,
+          data.parent_category_id
+        );
         if (createsCycle) {
           return res.status(400).json({
             message: "Cannot set parent category: circular hierarchy detected",

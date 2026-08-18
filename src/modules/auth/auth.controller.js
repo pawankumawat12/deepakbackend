@@ -33,6 +33,45 @@ const issueVerificationOtp = async (registration, email, updateRegistration) => 
   return sendOtp({ email, otp });
 };
 
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    if (!email) return res.status(400).json({ message: "Email is required" });
+    const user = await findUserByEmail(email);
+    if (!user) return res.status(404).json({ message: "Email is not registered" });
+
+    const resetToken = jwt.sign(
+      { id: user.id, purpose: "password-reset" },
+      process.env.ACCESS_TOKEN_SECRET,
+      { expiresIn: "15m" },
+    );
+    const resetUrl = `${process.env.ADMIN_URL || "http://localhost:5173"}/reset-password/${resetToken}`;
+    await sendOtp({ email, otp: `Reset your password using this link: ${resetUrl}` });
+    return res.status(200).json({ message: "Password reset link sent", accessToken: resetToken });
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    return res.status(500).json({ message: "Failed to send password reset link" });
+  }
+};
+
+const resetPassword = async (req, res) => {
+  try {
+    const { accessToken } = req.params;
+    const { password } = req.body || {};
+    if (!accessToken || !password) return res.status(400).json({ message: "Access token and password are required" });
+    if (password.length < 8) return res.status(400).json({ message: "Password must be at least 8 characters" });
+    const decoded = jwt.verify(accessToken, process.env.ACCESS_TOKEN_SECRET);
+    if (decoded.purpose !== "password-reset") return res.status(401).json({ message: "Invalid password reset token" });
+    const user = await findUserById(decoded.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    await updateUser(user.id, { password: await bcrypt.hash(password, 10), access_token: null });
+    return res.status(200).json({ message: "Password reset successfully" });
+  } catch (error) {
+    console.error("Reset password error:", error);
+    return res.status(401).json({ message: "Invalid or expired password reset token" });
+  }
+};
+
 const sendotp = async (req, res) => {
   try {
     const { email } = req.body;
@@ -422,6 +461,8 @@ const logout = (req, res) => {
 };
 
 module.exports = {
+  forgotPassword,
+  resetPassword,
   sendotp,
   register,
   registerAdmin,

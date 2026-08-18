@@ -8,6 +8,7 @@ const {
   sendOtp,
   verifyOtp,
   refreshAccessToken,
+  getMe,
   logout,
   forgotPassword,
   resetPassword,
@@ -39,6 +40,7 @@ router.post("/register", register);
 
 
 router.post("/verify-otp", verifyOtp);
+router.get("/me", verifyToken, getMe);
 router.post("/refresh-token", refreshAccessToken);
 router.post("/logout", logout);
 // Register admin: allow first admin without auth, then require admin token.

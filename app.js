@@ -7,9 +7,17 @@ const productRoutes = require("./src/modules/product/product.routes");
 const cookieParser = require("cookie-parser");
 
 const app = express();
+const allowedOrigins = (process.env.BFF || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: (process.env.BFF).split(','),
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("Origin not allowed by CORS"));
+    },
     credentials: true,
   })
 );

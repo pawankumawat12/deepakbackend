@@ -20,7 +20,11 @@ const {
   generateRefreshToken,
 } = require("../../../config/helper");
 
-const issueVerificationOtp = async (registration, email, updateRegistration) => {
+const issueVerificationOtp = async (
+  registration,
+  email,
+  updateRegistration
+) => {
   const otp = Math.floor(1000 + Math.random() * 9000).toString();
   // Keep the existing OTP lifetime unchanged.
   const expireAt = new Date(Date.now() + 15 * 60 * 1000);
@@ -38,19 +42,29 @@ const forgotPassword = async (req, res) => {
     const { email } = req.body || {};
     if (!email) return res.status(400).json({ message: "Email is required" });
     const user = await findUserByEmail(email);
-    if (!user) return res.status(404).json({ message: "Email is not registered" });
+    if (!user)
+      return res.status(404).json({ message: "Email is not registered" });
 
     const resetToken = jwt.sign(
       { id: user.id, purpose: "password-reset" },
       process.env.ACCESS_TOKEN_SECRET,
-      { expiresIn: "15m" },
+      { expiresIn: "15m" }
     );
-    const resetUrl = `${process.env.ADMIN_URL || "http://localhost:5173"}/reset-password/${resetToken}`;
-    await sendOtp({ email, otp: `Reset your password using this link: ${resetUrl}` });
-    return res.status(200).json({ message: "Password reset link sent", accessToken: resetToken });
+    const resetUrl = `${
+      process.env.ADMIN_URL || "http://localhost:5173"
+    }/reset-password/${resetToken}`;
+    await sendOtp({
+      email,
+      otp: `Reset your password using this link: ${resetUrl}`,
+    });
+    return res
+      .status(200)
+      .json({ message: "Password reset link sent", accessToken: resetToken });
   } catch (error) {
     console.error("Forgot password error:", error);
-    return res.status(500).json({ message: "Failed to send password reset link" });
+    return res
+      .status(500)
+      .json({ message: "Failed to send password reset link" });
   }
 };
 
@@ -58,17 +72,29 @@ const resetPassword = async (req, res) => {
   try {
     const { accessToken } = req.params;
     const { password } = req.body || {};
-    if (!accessToken || !password) return res.status(400).json({ message: "Access token and password are required" });
-    if (password.length < 8) return res.status(400).json({ message: "Password must be at least 8 characters" });
+    if (!accessToken || !password)
+      return res
+        .status(400)
+        .json({ message: "Access token and password are required" });
+    if (password.length < 8)
+      return res
+        .status(400)
+        .json({ message: "Password must be at least 8 characters" });
     const decoded = jwt.verify(accessToken, process.env.ACCESS_TOKEN_SECRET);
-    if (decoded.purpose !== "password-reset") return res.status(401).json({ message: "Invalid password reset token" });
+    if (decoded.purpose !== "password-reset")
+      return res.status(401).json({ message: "Invalid password reset token" });
     const user = await findUserById(decoded.id);
     if (!user) return res.status(404).json({ message: "User not found" });
-    await updateUser(user.id, { password: await bcrypt.hash(password, 10), access_token: null });
+    await updateUser(user.id, {
+      password: await bcrypt.hash(password, 10),
+      access_token: null,
+    });
     return res.status(200).json({ message: "Password reset successfully" });
   } catch (error) {
     console.error("Reset password error:", error);
-    return res.status(401).json({ message: "Invalid or expired password reset token" });
+    return res
+      .status(401)
+      .json({ message: "Invalid or expired password reset token" });
   }
 };
 
@@ -96,7 +122,7 @@ const sendotp = async (req, res) => {
     const result = await issueVerificationOtp(
       registration,
       email,
-      updateRegistration,
+      updateRegistration
     );
 
     return res.status(200).json({
@@ -137,7 +163,10 @@ const verifyOtp = async (req, res) => {
 
     const registration = user || pendingRegistration;
 
-    if (!registration.expire_at || new Date() > new Date(registration.expire_at)) {
+    if (
+      !registration.expire_at ||
+      new Date() > new Date(registration.expire_at)
+    ) {
       return res.status(400).json({
         message: "OTP expired",
       });
@@ -230,7 +259,11 @@ async function register(req, res) {
         // creating a second account. New registrations are stored only in
         // pending_registrations until their OTP is verified.
         if (!existingUser.is_email_verified) {
-          const result = await issueVerificationOtp(existingUser, email, updateUser);
+          const result = await issueVerificationOtp(
+            existingUser,
+            email,
+            updateUser
+          );
           return res.status(200).json({
             message: "Verification OTP sent successfully",
             data: {
@@ -250,7 +283,10 @@ async function register(req, res) {
       const existingUser = await findUserByPhone(phone);
       const pendingRegistration = await findPendingRegistrationByPhone(phone);
 
-      if (existingUser || (pendingRegistration && pendingRegistration.email !== email)) {
+      if (
+        existingUser ||
+        (pendingRegistration && pendingRegistration.email !== email)
+      ) {
         return res.status(400).json({
           message: "Phone number dosen't registered",
         });
@@ -269,7 +305,7 @@ async function register(req, res) {
     const result = await issueVerificationOtp(
       pendingRegistration,
       email,
-      updatePendingRegistration,
+      updatePendingRegistration
     );
 
     return res.status(201).json({
@@ -399,6 +435,34 @@ async function login(req, res) {
   }
 }
 
+// Admin login validates the password before issuing the OTP.
+async function adminLogin(req, res) {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password)
+      return res
+        .status(400)
+        .json({ message: "Email and password are required" });
+    const admin = await findUserByEmail(email);
+    if (
+      !admin ||
+      admin.role !== "admin" ||
+      !(await bcrypt.compare(password, admin.password))
+    )
+      return res.status(401).json({ message: "Invalid admin credentials" });
+    const result = await issueVerificationOtp(admin, email, updateUser);
+    return res
+      .status(200)
+      .json({
+        message: "Credentials verified. OTP sent.",
+        data: { messageId: result.messageId },
+      });
+  } catch (error) {
+    console.error("Admin login error:", error);
+    return res.status(500).json({ message: "Unable to start admin login" });
+  }
+}
+
 //refresh token api
 const refreshAccessToken = async (req, res) => {
   try {
@@ -467,6 +531,7 @@ module.exports = {
   register,
   registerAdmin,
   login,
+  adminLogin,
   verifyOtp,
   refreshAccessToken,
   logout,

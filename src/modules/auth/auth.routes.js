@@ -4,6 +4,7 @@ const {
   register,
   registerAdmin,
   login,
+  adminLogin,
   sendotp,
   verifyOtp,
   refreshAccessToken,
@@ -13,6 +14,9 @@ const {
 } = require("./auth.controller");
 const { verifyToken, isAdmin } = require("../../../middleware/auth.middleware");
 const { countAdmins } = require("../../models/auth.model");
+
+router.post("/login", login);
+router.post("/admin-login", adminLogin);
 
 async function allowInitialAdmin(req, res, next) {
   try {
@@ -28,13 +32,13 @@ async function allowInitialAdmin(req, res, next) {
   }
 }
 
-
 router.post("/send-otp", sendotp);
 router.post("/resend-otp", sendotp);
 router.post("/forgot-password", forgotPassword);
 router.post("/reset-password/:accessToken", resetPassword);
 router.post("/register", register);
-router.post("/login", login);
+
+
 router.post("/verify-otp", verifyOtp);
 router.post("/refresh-token", refreshAccessToken);
 router.post("/logout", logout);

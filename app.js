@@ -7,10 +7,9 @@ const productRoutes = require("./src/modules/product/product.routes");
 const cookieParser = require("cookie-parser");
 
 const app = express();
-
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || process.env.ADMIN_URL,
+    origin: (process.env.BFF).split(','),
     credentials: true,
   })
 );

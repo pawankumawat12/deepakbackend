@@ -18,6 +18,15 @@ function parseOptionalBoolean(value) {
   return null;
 }
 
+const PRODUCT_SORT_COLUMNS = {
+  name: "products.name",
+  category: "categories.name",
+  price: "products.price",
+  stock: "products.stock",
+  status: "products.is_active",
+  createdAt: "products.created_at",
+};
+
 function validatePrice(price) {
   const parsed = Number(price);
   if (!Number.isFinite(parsed) || parsed < 0) {
@@ -115,6 +124,7 @@ function validateProductUpdate({
   } else if (images.length > 0) {
     data.images = images;
   }
+
   if (name !== undefined) {
     if (typeof name !== "string" || name.trim().length < 2) {
       errors.name = "Name must be at least 2 characters.";
@@ -128,8 +138,8 @@ function validateProductUpdate({
   if (description !== undefined) {
     if (description !== null && typeof description !== "string") {
       errors.description = "Description must be a string.";
-    } else if (description && description.length > 5000) {
-      errors.description = "Description must not exceed 5000 characters.";
+    } else if (description && description.length > 500) {
+      errors.description = "Description must not exceed 500 characters.";
     } else {
       data.description = description === null ? null : description.trim();
     }
@@ -182,7 +192,13 @@ function validateProductUpdate({
   };
 }
 
-function validateProductListQuery({ categoryId, isActive, search }) {
+function validateProductListQuery({
+  categoryId,
+  isActive,
+  search,
+  sortBy,
+  sortOrder,
+}) {
   const errors = {};
   const filters = {};
 
@@ -211,6 +227,22 @@ function validateProductListQuery({ categoryId, isActive, search }) {
       errors.search = "Search must not exceed 100 characters.";
     } else {
       filters.search = search.trim();
+    }
+  }
+
+  if (sortBy !== undefined) {
+    if (!PRODUCT_SORT_COLUMNS[sortBy]) {
+      errors.sortBy = "Invalid sort field.";
+    } else {
+      filters.sortBy = PRODUCT_SORT_COLUMNS[sortBy];
+    }
+  }
+
+  if (sortOrder !== undefined) {
+    if (sortOrder !== "asc" && sortOrder !== "desc") {
+      errors.sortOrder = "Sort order must be asc or desc.";
+    } else {
+      filters.sortOrder = sortOrder;
     }
   }
 

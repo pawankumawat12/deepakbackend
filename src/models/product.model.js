@@ -13,6 +13,11 @@ const PRODUCT_COLUMNS = [
   "products.updated_at",
 ];
 
+function serializeImages(data) {
+  if (!Array.isArray(data.images)) return data;
+  return { ...data, images: JSON.stringify(data.images) };
+}
+
 function findProductById(id) {
   return db("products")
     .select([
@@ -24,7 +29,16 @@ function findProductById(id) {
     .first();
 }
 
-function findProducts({ page, limit, offset, categoryId, isActive, search }) {
+function findProducts({
+  page,
+  limit,
+  offset,
+  categoryId,
+  isActive,
+  search,
+  sortBy = "products.created_at",
+  sortOrder = "desc",
+}) {
   let query = db("products")
     .select([
       ...PRODUCT_COLUMNS,
@@ -50,7 +64,7 @@ function findProducts({ page, limit, offset, categoryId, isActive, search }) {
   }
 
   return query
-    .orderBy("products.created_at", "desc")
+    .orderBy(sortBy, sortOrder)
     .limit(limit)
     .offset(offset);
 }
@@ -91,7 +105,7 @@ function countProductsByCategory(categoryId) {
 
 function createProduct(data) {
   return db("products")
-    .insert(data)
+    .insert(serializeImages(data))
     .returning([
       "id",
       "name",
@@ -110,7 +124,7 @@ function createProduct(data) {
 function updateProduct(id, data) {
   return db("products")
     .where({ id })
-    .update(data)
+    .update(serializeImages(data))
     .returning([
       "id",
       "name",

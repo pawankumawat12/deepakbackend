@@ -137,27 +137,93 @@ async function createProductHandler(req, res) {
 async function updateProductHandler(req, res) {
   try {
     const id = parseIdParam(req.params.id);
+
     if (!id) {
-      return res.status(400).json({ message: "Invalid product ID" });
+      return res.status(400).json({
+        message: "Invalid product ID",
+      });
     }
 
     const existingProduct = await findProductById(id);
+
     if (!existingProduct) {
-      return res.status(404).json({ message: "Product not found" });
+      return res.status(404).json({
+        message: "Product not found",
+      });
     }
 
-    const { name, description, price, stock, categoryId, isActive } =
-      req.body || {};
-    const images = (req.files || []).map((file) => `/uploads/${file.filename}`);
-    const { valid, errors, data } = validateProductUpdate({
+    const {
       name,
       description,
       price,
       stock,
-      images,
       categoryId,
       isActive,
-    });
+      existingImages,
+    } = req.body || {};
+
+    /*
+     * Existing images that frontend wants to keep
+     */
+    let keptImages = [];
+
+    if (existingImages) {
+      try {
+        keptImages =
+          typeof existingImages === "string"
+            ? JSON.parse(existingImages)
+            : existingImages;
+      } catch {
+        return res.status(400).json({
+          message: "Invalid existingImages format",
+        });
+      }
+    }
+
+    if (!Array.isArray(keptImages)) {
+      return res.status(400).json({
+        message: "existingImages must be an array",
+      });
+    }
+
+    /*
+     * New uploaded images
+     */
+    const newImages = (req.files || []).map(
+      (file) => `/uploads/${file.filename}`
+    );
+
+    /*
+     * Final images
+     *
+     * Existing images user kept
+     * +
+     * Newly uploaded images
+     */
+    const images = [
+      ...keptImages,
+      ...newImages,
+    ];
+
+    /*
+     * Maximum 5 images
+     */
+    if (images.length > 5) {
+      return res.status(400).json({
+        message: "Maximum 5 images are allowed",
+      });
+    }
+
+    const { valid, errors, data } =
+      validateProductUpdate({
+        name,
+        description,
+        price,
+        stock,
+        images,
+        categoryId,
+        isActive,
+      });
 
     if (!valid) {
       return res.status(400).json({
@@ -167,7 +233,10 @@ async function updateProductHandler(req, res) {
     }
 
     if (data.category_id) {
-      const category = await findCategoryById(data.category_id);
+      const category = await findCategoryById(
+        data.category_id
+      );
+
       if (!category) {
         return res.status(400).json({
           message: "Category not found",
@@ -176,6 +245,7 @@ async function updateProductHandler(req, res) {
     }
 
     await updateProduct(id, data);
+
     const product = await findProductById(id);
 
     return res.status(200).json({
@@ -191,7 +261,9 @@ async function updateProductHandler(req, res) {
       });
     }
 
-    return res.status(500).json({ message: "Server error" });
+    return res.status(500).json({
+      message: "Server error",
+    });
   }
 }
 

@@ -11,6 +11,7 @@ const {
   getMe,
   logout,
   forgotPassword,
+  verifyPasswordResetToken,
   resetPassword,
 } = require("./auth.controller");
 const { verifyToken, isAdmin } = require("../../../middleware/auth.middleware");
@@ -35,6 +36,7 @@ async function allowInitialAdmin(req, res, next) {
 
 router.post("/send-otp", sendOtp);
 router.post("/forgot-password", forgotPassword);
+router.get("/reset-password/:accessToken", verifyPasswordResetToken);
 router.post("/reset-password/:accessToken", resetPassword);
 router.post("/register", register);
 

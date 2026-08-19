@@ -81,4 +81,4 @@ function validateLogin({ email, password, phone }) {
   };
 }
 
-module.exports = { validateRegister, validateLogin };
+module.exports = { validateRegister, validateLogin, validatePassword };

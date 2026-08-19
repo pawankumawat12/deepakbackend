@@ -53,12 +53,28 @@ const sendOtp = async ({ email, otp }) => {
   }
 };
 
+const sendPasswordResetEmail = async ({ email, resetUrl }) => {
+  try {
+    return await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: email,
+      subject: "Reset your SFC Cafe password",
+      text: `We received a request to reset your password. Use this link within 15 minutes: ${resetUrl}\n\nIf you did not request this, you can safely ignore this email.`,
+      html: `<p>We received a request to reset your password.</p><p><a href="${resetUrl}">Reset password</a></p><p>This link expires in 15 minutes. If you did not request this, you can safely ignore this email.</p>`,
+    });
+  } catch (error) {
+    console.error("Nodemailer password reset error:", error);
+    throw error;
+  }
+};
+
 module.exports = {
   findUserByEmail,
   countAdmins,
   createUser,
   findUserByPhone,
   sendOtp,
+  sendPasswordResetEmail,
   updateUser,
   findUserById,
 };

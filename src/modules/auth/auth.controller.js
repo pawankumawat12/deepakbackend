@@ -1,6 +1,8 @@
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const { validateRegister, validateLogin } = require("./auth.validation");
+const crypto = require("crypto");
+const db = require("../../../config/db");
+const { validateRegister, validateLogin, validatePassword } = require("./auth.validation");
 const {
   findUserByEmail,
   findUserByPhone,
@@ -8,6 +10,7 @@ const {
   countAdmins,
   createUser,
   sendOtp: sendOtpEmail,
+  sendPasswordResetEmail,
   updateUser,
 } = require("../../models/auth.model");
 const {
@@ -18,6 +21,20 @@ const {
 const OTP_RESEND_COOLDOWN_MS = 30 * 1000;
 const OTP_RESEND_LIMIT = 4;
 const OTP_RESEND_LOCK_MS = 10 * 60 * 1000;
+const PASSWORD_RESET_EXPIRY_MS = 15 * 60 * 1000;
+
+const hashResetToken = (token) =>
+  crypto.createHash("sha256").update(token).digest("hex");
+
+const findValidPasswordResetUser = async (token) => {
+  if (!token || typeof token !== "string") return null;
+
+  const user = await db("users")
+    .where({ password_reset_token: hashResetToken(token) })
+    .where("password_reset_expires_at", ">", new Date())
+    .first();
+  return user || null;
+};
 
 const secondsRemaining = (date) =>
   Math.max(1, Math.ceil((new Date(date).getTime() - Date.now()) / 1000));
@@ -109,32 +126,47 @@ const resendVerificationOtp = async (registration, email, updateRegistration) =>
 
 const forgotPassword = async (req, res) => {
   try {
-    const { email } = req.body || {};
+    const email = req.body?.email?.trim().toLowerCase();
     if (!email) return res.status(400).json({ message: "Email is required" });
     const user = await findUserByEmail(email);
-    if (!user)
-      return res.status(404).json({ message: "Email is not registered" });
+    // Always use the same response so this endpoint cannot reveal registered emails.
+    if (user) {
+      const resetToken = crypto.randomBytes(32).toString("base64url");
+      const resetUrlBase =
+        user.role === "admin"
+          ? process.env.ADMIN_URL || "http://localhost:5173"
+          : process.env.FRONTEND_URL || "http://localhost:3000";
+      const resetUrl = `${resetUrlBase}/reset-password?token=${encodeURIComponent(resetToken)}`;
 
-    const resetToken = jwt.sign(
-      { id: user.id, purpose: "password-reset" },
-      process.env.ACCESS_TOKEN_SECRET,
-      { expiresIn: "15m" }
-    );
-    const resetUrl = `${
-      process.env.ADMIN_URL || "http://localhost:5173"
-    }/reset-password/${resetToken}`;
-    await sendOtpEmail({
-      email,
-      otp: `Reset your password using this link: ${resetUrl}`,
+      await updateUser(user.id, {
+        password_reset_token: hashResetToken(resetToken),
+        password_reset_expires_at: new Date(Date.now() + PASSWORD_RESET_EXPIRY_MS),
+      });
+      await sendPasswordResetEmail({ email, resetUrl });
+    }
+
+    return res.status(200).json({
+      message: "If that email is registered, a password reset link has been sent.",
     });
-    return res
-      .status(200)
-      .json({ message: "Password reset link sent", accessToken: resetToken });
   } catch (error) {
     console.error("Forgot password error:", error);
     return res
       .status(500)
       .json({ message: "Failed to send password reset link" });
+  }
+};
+
+const verifyPasswordResetToken = async (req, res) => {
+  try {
+    const user = await findValidPasswordResetUser(req.params.accessToken);
+    if (!user) {
+      return res.status(400).json({ message: "Invalid or expired password reset link" });
+    }
+
+    return res.status(200).json({ message: "Password reset link is valid" });
+  } catch (error) {
+    console.error("Verify password reset token error:", error);
+    return res.status(500).json({ message: "Unable to verify password reset link" });
   }
 };
 
@@ -146,25 +178,24 @@ const resetPassword = async (req, res) => {
       return res
         .status(400)
         .json({ message: "Access token and password are required" });
-    if (password.length < 8)
+    if (!validatePassword(password))
       return res
         .status(400)
-        .json({ message: "Password must be at least 8 characters" });
-    const decoded = jwt.verify(accessToken, process.env.ACCESS_TOKEN_SECRET);
-    if (decoded.purpose !== "password-reset")
-      return res.status(401).json({ message: "Invalid password reset token" });
-    const user = await findUserById(decoded.id);
-    if (!user) return res.status(404).json({ message: "User not found" });
+        .json({ message: "Password must be 8+ characters and include upper, lower, number, and special character" });
+    const user = await findValidPasswordResetUser(accessToken);
+    if (!user) {
+      return res.status(400).json({ message: "Invalid or expired password reset link" });
+    }
     await updateUser(user.id, {
       password: await bcrypt.hash(password, 10),
       access_token: null,
+      password_reset_token: null,
+      password_reset_expires_at: null,
     });
     return res.status(200).json({ message: "Password reset successfully" });
   } catch (error) {
     console.error("Reset password error:", error);
-    return res
-      .status(401)
-      .json({ message: "Invalid or expired password reset token" });
+    return res.status(500).json({ message: "Unable to reset password" });
   }
 };
 
@@ -460,6 +491,7 @@ async function login(req, res) {
         id: user.id,
         name: user.name,
         email: user.email,
+        token: user.accessToken,
         phone: user.phone,
         role: user.role,
       },
@@ -504,8 +536,8 @@ const refreshAccessToken = async (req, res) => {
     const refreshToken = req.cookies.refreshToken;
 
     if (!refreshToken) {
-      return res.status(401).json({
-        message: "Refresh token not found",
+      return res.status(404).json({
+        message: "Refresh token not found. Please login again",
       });
     }
 
@@ -514,7 +546,7 @@ const refreshAccessToken = async (req, res) => {
     const user = await findUserById(decoded.id);
 
     if (!user) {
-      return res.status(401).json({
+      return res.status(404).json({
         message: "User not found",
       });
     }
@@ -541,7 +573,7 @@ const refreshAccessToken = async (req, res) => {
   } catch (error) {
     console.error("Refresh token error:", error);
 
-    return res.status(401).json({
+    return res.status(404).json({
       message: "Invalid or expired refresh token",
     });
   }
@@ -581,6 +613,7 @@ const logout = (req, res) => {
 
 module.exports = {
   forgotPassword,
+  verifyPasswordResetToken,
   resetPassword,
   sendOtp,
   register,

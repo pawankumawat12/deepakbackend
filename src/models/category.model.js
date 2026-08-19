@@ -15,7 +15,16 @@ function findCategoryById(id) {
   return db("categories").where({ id }).first();
 }
 
-function findCategories({ page, limit, offset, parentCategoryId, isActive }) {
+function findCategories({
+  page,
+  limit,
+  offset,
+  parentCategoryId,
+  isActive,
+  search,
+  sortBy = "created_at",
+  sortOrder = "desc",
+}) {
   let query = db("categories").select(CATEGORY_COLUMNS);
 
   if (parentCategoryId !== undefined) {
@@ -30,13 +39,22 @@ function findCategories({ page, limit, offset, parentCategoryId, isActive }) {
     query = query.where({ is_active: isActive });
   }
 
+  if (search) {
+    query = query.where(function () {
+      this.whereILike("name", `%${search}%`).orWhereILike(
+        "description",
+        `%${search}%`,
+      );
+    });
+  }
+
   return query
-    .orderBy("created_at", "desc")
+    .orderBy(sortBy, sortOrder)
     .limit(limit)
     .offset(offset);
 }
 
-function countCategories({ parentCategoryId, isActive }) {
+function countCategories({ parentCategoryId, isActive, search }) {
   let query = db("categories");
 
   if (parentCategoryId !== undefined) {
@@ -49,6 +67,15 @@ function countCategories({ parentCategoryId, isActive }) {
 
   if (isActive !== undefined) {
     query = query.where({ is_active: isActive });
+  }
+
+  if (search) {
+    query = query.where(function () {
+      this.whereILike("name", `%${search}%`).orWhereILike(
+        "description",
+        `%${search}%`,
+      );
+    });
   }
 
   return query

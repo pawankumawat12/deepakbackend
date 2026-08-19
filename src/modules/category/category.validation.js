@@ -18,6 +18,13 @@ function parseOptionalBoolean(value) {
   return null;
 }
 
+const CATEGORY_SORT_COLUMNS = {
+  name: "name",
+  description: "description",
+  status: "is_active",
+  createdAt: "created_at",
+};
+
 function parseOptionalParentCategoryId(value) {
   if (value === undefined || value === null || value === "") {
     return undefined;
@@ -151,7 +158,13 @@ function validateCategoryUpdate({ name, description, image, parentCategoryId, is
   };
 }
 
-function validateCategoryListQuery({ parentCategoryId, isActive }) {
+function validateCategoryListQuery({
+  parentCategoryId,
+  isActive,
+  search,
+  sortBy,
+  sortOrder,
+}) {
   const errors = {};
   const filters = {};
 
@@ -170,6 +183,32 @@ function validateCategoryListQuery({ parentCategoryId, isActive }) {
       errors.isActive = "isActive must be a boolean value.";
     } else {
       filters.isActive = parsedIsActive;
+    }
+  }
+
+  if (search !== undefined) {
+    if (typeof search !== "string" || search.trim().length === 0) {
+      errors.search = "Search must be a non-empty string.";
+    } else if (search.trim().length > 100) {
+      errors.search = "Search must not exceed 100 characters.";
+    } else {
+      filters.search = search.trim();
+    }
+  }
+
+  if (sortBy !== undefined) {
+    if (!CATEGORY_SORT_COLUMNS[sortBy]) {
+      errors.sortBy = "Invalid sort field.";
+    } else {
+      filters.sortBy = CATEGORY_SORT_COLUMNS[sortBy];
+    }
+  }
+
+  if (sortOrder !== undefined) {
+    if (sortOrder !== "asc" && sortOrder !== "desc") {
+      errors.sortOrder = "Sort order must be asc or desc.";
+    } else {
+      filters.sortOrder = sortOrder;
     }
   }
 

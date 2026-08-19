@@ -317,6 +317,7 @@ const verifyOtp = async (req, res) => {
     });
   }
 };
+
 async function register(req, res) {
   try {
     const { name, email, phone, password } = req.body || {};
@@ -426,7 +427,6 @@ async function registerAdmin(req, res) {
   }
 }
 
-// LOGIN (common for user + admin)
 async function login(req, res) {
   try {
     const { email, phone, password } = req.body;
@@ -502,7 +502,6 @@ async function login(req, res) {
   }
 }
 
-// Admin login validates the password before issuing the OTP.
 async function adminLogin(req, res) {
   try {
     const { email, password } = req.body || {};
@@ -530,7 +529,6 @@ async function adminLogin(req, res) {
   }
 }
 
-//refresh token api
 const refreshAccessToken = async (req, res) => {
   try {
     const refreshToken = req.cookies.refreshToken;

@@ -7,10 +7,10 @@ const productRoutes = require("./src/modules/product/product.routes");
 const cookieParser = require("cookie-parser");
 
 const app = express();
-const allowedOrigins = (process.env.BFF || "")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+// const allowedOrigins = (process.env.BFF || "")
+//   .split(",")
+//   .map((origin) => origin.trim())
+//   .filter(Boolean);
 
 app.use(
   cors({
@@ -43,4 +43,4 @@ app.use((err, req, res, next) => {
   });
 });
 
-module.exports = app;
+module.exports = app;0

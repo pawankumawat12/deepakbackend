@@ -45,7 +45,6 @@ router.post("/verify-otp", verifyOtp);
 router.get("/me", verifyToken, getMe);
 router.post("/refresh-token", refreshAccessToken);
 router.post("/logout", logout);
-// Register admin: allow first admin without auth, then require admin token.
 router.post("/register-admin", allowInitialAdmin, registerAdmin);
 
 module.exports = router;

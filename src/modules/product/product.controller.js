@@ -37,7 +37,8 @@ async function listProducts(req, res) {
       });
     }
 
-    if (filters.categoryId) {
+    // Validate the category server-side before querying its products.
+    if (filters.categoryId !== undefined) {
       const category = await findCategoryById(filters.categoryId);
       if (!category) {
         return res.status(400).json({

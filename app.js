@@ -4,6 +4,7 @@ const cors = require("cors");
 const authRoutes = require("./src/modules/auth/auth.routes");
 const categoryRoutes = require("./src/modules/category/category.routes");
 const productRoutes = require("./src/modules/product/product.routes");
+const cartRoutes = require("./src/modules/cart/cart.routes");
 const cookieParser = require("cookie-parser");
 
 const app = express();
@@ -26,6 +27,7 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/categories", categoryRoutes);
 app.use("/api/v1/products", productRoutes);
+app.use("/api/v1/cart", cartRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

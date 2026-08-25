@@ -24,7 +24,7 @@ function countAdmins() {
 function createUser(data) {
   return db("users")
     .insert(data)
-    .returning(["id", "name", "email", "role"])
+    .returning(["id", "name", "email", "phone", "role", "image"])
     .then((rows) => rows[0]);
 }
 
@@ -33,7 +33,7 @@ function updateUser(id, data) {
   return db("users")
     .where({ id })
     .update(data)
-    .returning(["id", "name", "email", "phone", "role"]);
+    .returning(["id", "name", "email", "phone", "role", "image"]);
 }
 
 const sendOtp = async ({ email, otp }) => {

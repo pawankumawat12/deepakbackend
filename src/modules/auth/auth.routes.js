@@ -13,9 +13,11 @@ const {
   forgotPassword,
   verifyPasswordResetToken,
   resetPassword,
+  updateProfile,
 } = require("./auth.controller");
 const { verifyToken, isAdmin } = require("../../../middleware/auth.middleware");
 const { countAdmins } = require("../../models/auth.model");
+const { uploadImage } = require("../../../middleware/upload");
 
 router.post("/login", login);
 router.post("/admin-login", adminLogin);
@@ -43,6 +45,7 @@ router.post("/register", register);
 
 router.post("/verify-otp", verifyOtp);
 router.get("/me", verifyToken, getMe);
+router.put("/profile", verifyToken, uploadImage.single("image"), updateProfile);
 router.post("/refresh-token", refreshAccessToken);
 router.post("/logout", logout);
 router.post("/register-admin", allowInitialAdmin, registerAdmin);

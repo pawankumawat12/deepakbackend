@@ -2,7 +2,12 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const db = require("../../../config/db");
-const { validateRegister, validateLogin, validatePassword } = require("./auth.validation");
+const {
+  validateRegister,
+  validateLogin,
+  validatePassword,
+  validateUpdateProfile,
+} = require("./auth.validation");
 const {
   findUserByEmail,
   findUserByPhone,
@@ -62,7 +67,11 @@ const issueVerificationOtp = async (
   return sendOtpEmail({ email, otp });
 };
 
-const resendVerificationOtp = async (registration, email, updateRegistration) => {
+const resendVerificationOtp = async (
+  registration,
+  email,
+  updateRegistration
+) => {
   const now = new Date();
 
   if (
@@ -70,7 +79,9 @@ const resendVerificationOtp = async (registration, email, updateRegistration) =>
     new Date(registration.otp_resend_locked_until) > now
   ) {
     const retryAfter = secondsRemaining(registration.otp_resend_locked_until);
-    const error = new Error(`Resend limit reached. Try again in ${retryAfter} seconds.`);
+    const error = new Error(
+      `Resend limit reached. Try again in ${retryAfter} seconds.`
+    );
     error.status = 429;
     error.retryAfter = retryAfter;
     error.lockedUntil = registration.otp_resend_locked_until;
@@ -91,7 +102,9 @@ const resendVerificationOtp = async (registration, email, updateRegistration) =>
     );
     if (nextAllowedAt > now) {
       const retryAfter = secondsRemaining(nextAllowedAt);
-      const error = new Error(`Please wait ${retryAfter} seconds before resending the OTP.`);
+      const error = new Error(
+        `Please wait ${retryAfter} seconds before resending the OTP.`
+      );
       error.status = 429;
       error.retryAfter = retryAfter;
       throw error;
@@ -103,7 +116,9 @@ const resendVerificationOtp = async (registration, email, updateRegistration) =>
     await updateRegistration(registration.id, {
       otp_resend_locked_until: lockedUntil,
     });
-    const error = new Error("You have used all 4 resend attempts. Try again in 10 minutes.");
+    const error = new Error(
+      "You have used all 4 resend attempts. Try again in 10 minutes."
+    );
     error.status = 429;
     error.retryAfter = Math.ceil(OTP_RESEND_LOCK_MS / 1000);
     error.lockedUntil = lockedUntil;
@@ -121,7 +136,11 @@ const resendVerificationOtp = async (registration, email, updateRegistration) =>
     otp_resend_locked_until: null,
   });
   const result = await sendOtpEmail({ email, otp });
-  return { result, resendCount: nextCount, attemptsRemaining: OTP_RESEND_LIMIT - nextCount };
+  return {
+    result,
+    resendCount: nextCount,
+    attemptsRemaining: OTP_RESEND_LIMIT - nextCount,
+  };
 };
 
 const forgotPassword = async (req, res) => {
@@ -136,17 +155,22 @@ const forgotPassword = async (req, res) => {
         user.role === "admin"
           ? process.env.ADMIN_URL || "http://localhost:5173"
           : process.env.FRONTEND_URL || "http://localhost:3000";
-      const resetUrl = `${resetUrlBase}/reset-password?token=${encodeURIComponent(resetToken)}`;
+      const resetUrl = `${resetUrlBase}/reset-password?token=${encodeURIComponent(
+        resetToken
+      )}`;
 
       await updateUser(user.id, {
         password_reset_token: hashResetToken(resetToken),
-        password_reset_expires_at: new Date(Date.now() + PASSWORD_RESET_EXPIRY_MS),
+        password_reset_expires_at: new Date(
+          Date.now() + PASSWORD_RESET_EXPIRY_MS
+        ),
       });
       await sendPasswordResetEmail({ email, resetUrl });
     }
 
     return res.status(200).json({
-      message: "If that email is registered, a password reset link has been sent.",
+      message:
+        "If that email is registered, a password reset link has been sent.",
     });
   } catch (error) {
     console.error("Forgot password error:", error);
@@ -160,13 +184,17 @@ const verifyPasswordResetToken = async (req, res) => {
   try {
     const user = await findValidPasswordResetUser(req.params.accessToken);
     if (!user) {
-      return res.status(400).json({ message: "Invalid or expired password reset link" });
+      return res
+        .status(400)
+        .json({ message: "Invalid or expired password reset link" });
     }
 
     return res.status(200).json({ message: "Password reset link is valid" });
   } catch (error) {
     console.error("Verify password reset token error:", error);
-    return res.status(500).json({ message: "Unable to verify password reset link" });
+    return res
+      .status(500)
+      .json({ message: "Unable to verify password reset link" });
   }
 };
 
@@ -181,10 +209,15 @@ const resetPassword = async (req, res) => {
     if (!validatePassword(password))
       return res
         .status(400)
-        .json({ message: "Password must be 8+ characters and include upper, lower, number, and special character" });
+        .json({
+          message:
+            "Password must be 8+ characters and include upper, lower, number, and special character",
+        });
     const user = await findValidPasswordResetUser(accessToken);
     if (!user) {
-      return res.status(400).json({ message: "Invalid or expired password reset link" });
+      return res
+        .status(400)
+        .json({ message: "Invalid or expired password reset link" });
     }
     await updateUser(user.id, {
       password: await bcrypt.hash(password, 10),
@@ -215,11 +248,7 @@ const sendOtp = async (req, res) => {
       return res.status(404).json({ message: "Email is not registered" });
     }
 
-    const resend = await resendVerificationOtp(
-      user,
-      email,
-      updateUser
-    );
+    const resend = await resendVerificationOtp(user, email, updateUser);
 
     return res.status(200).json({
       message: "OTP resent successfully",
@@ -259,10 +288,7 @@ const verifyOtp = async (req, res) => {
       });
     }
 
-    if (
-      !user.expire_at ||
-      new Date() > new Date(user.expire_at)
-    ) {
+    if (!user.expire_at || new Date() > new Date(user.expire_at)) {
       return res.status(400).json({
         message: "OTP expired",
       });
@@ -307,6 +333,7 @@ const verifyOtp = async (req, res) => {
         email: user.email,
         phone: user.phone,
         role: user.role,
+        image: user.image,
       },
     });
   } catch (error) {
@@ -368,12 +395,9 @@ async function register(req, res) {
       is_email_verified: false,
     });
 
-    const result = await issueVerificationOtp(
-      user,
-      email,
-      updateUser,
-      { resetResendPolicy: true }
-    );
+    const result = await issueVerificationOtp(user, email, updateUser, {
+      resetResendPolicy: true,
+    });
 
     return res.status(201).json({
       message: "User registered successfully",
@@ -494,6 +518,7 @@ async function login(req, res) {
         token: user.accessToken,
         phone: user.phone,
         role: user.role,
+        image: user.image,
       },
     });
   } catch (error) {
@@ -516,13 +541,11 @@ async function adminLogin(req, res) {
       !(await bcrypt.compare(password, admin.password))
     )
       return res.status(404).json({ message: "Invalid admin credentials" });
-  const result = await issueVerificationOtp(admin, email, updateUser);
-    return res
-      .status(200)
-      .json({
-        message: "Credentials verified. OTP sent.",
-        data: { messageId: result.messageId },
-      });
+    const result = await issueVerificationOtp(admin, email, updateUser);
+    return res.status(200).json({
+      message: "Credentials verified. OTP sent.",
+      data: { messageId: result.messageId },
+    });
   } catch (error) {
     console.error("Admin login error:", error);
     return res.status(500).json({ message: "Unable to start admin login" });
@@ -566,6 +589,7 @@ const refreshAccessToken = async (req, res) => {
         email: user.email,
         phone: user.phone,
         role: user.role,
+        image: user.image,
       },
     });
   } catch (error) {
@@ -589,6 +613,7 @@ const getMe = async (req, res) => {
         email: user.email,
         phone: user.phone,
         role: user.role,
+        image: user.image,
       },
     });
   } catch (error) {
@@ -609,6 +634,86 @@ const logout = (req, res) => {
   return res.status(200).json({ message: "Logged out successfully" });
 };
 
+const updateProfile = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const { name, email, phone } = req.body || {};
+    const { valid, errors } = validateUpdateProfile({ name, email, phone });
+
+    if (!valid) {
+      return res.status(400).json({ message: "Validation failed", errors });
+    }
+
+    const currentUser = await findUserById(userId);
+    if (!currentUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const trimmedName = name.trim();
+    const trimmedEmail = email ? email.trim().toLowerCase() : null;
+    const trimmedPhone = phone ? phone.trim() : null;
+
+    // Check if email is already taken by another user
+    if (trimmedEmail && trimmedEmail !== currentUser.email) {
+      const existingUser = await db("users")
+        .where({ email: trimmedEmail })
+        .whereNot({ id: userId })
+        .first();
+      if (existingUser) {
+        return res.status(400).json({ message: "Email already registered" });
+      }
+    }
+
+    // Check if phone is already taken by another user
+    if (trimmedPhone && trimmedPhone !== currentUser.phone) {
+      const existingUser = await db("users")
+        .where({ phone: trimmedPhone })
+        .whereNot({ id: userId })
+        .first();
+      if (existingUser) {
+        return res
+          .status(400)
+          .json({ message: "Phone number already registered" });
+      }
+    }
+
+    const updateData = {
+      name: trimmedName,
+      email: trimmedEmail,
+      phone: trimmedPhone,
+      updated_at: new Date(),
+    };
+
+    if (req.file) {
+      updateData.image = `/uploads/${req.file.filename}`;
+    }
+
+    const updatedUsers = await updateUser(userId, updateData);
+    const updatedUser = Array.isArray(updatedUsers)
+      ? updatedUsers[0]
+      : updatedUsers;
+
+    return res.status(200).json({
+      message: "Profile updated successfully",
+      user: {
+        id: updatedUser.id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        phone: updatedUser.phone,
+        role: updatedUser.role,
+        image: updatedUser.image,
+      },
+    });
+  } catch (error) {
+    console.error("Update profile error:", error);
+    return res.status(500).json({ message: "Failed to update profile" });
+  }
+};
+
 module.exports = {
   forgotPassword,
   verifyPasswordResetToken,
@@ -622,4 +727,5 @@ module.exports = {
   refreshAccessToken,
   getMe,
   logout,
+  updateProfile,
 };

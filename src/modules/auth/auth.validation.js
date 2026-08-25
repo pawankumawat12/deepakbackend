@@ -81,4 +81,34 @@ function validateLogin({ email, password, phone }) {
   };
 }
 
-module.exports = { validateRegister, validateLogin, validatePassword };
+function validateUpdateProfile({ name, email, phone }) {
+  const errors = {};
+  if (!name || typeof name !== "string" || name.trim().length < 3) {
+    errors.name = "Name is required and must be at least 3 characters.";
+  }
+
+  const hasEmail = typeof email === "string" && email.trim() !== "";
+  const hasPhone = typeof phone === "string" && phone.trim() !== "";
+
+  if (hasEmail && !validateEmail(email.trim())) {
+    errors.email = "A valid email address is required.";
+  }
+
+  if (hasPhone && !validatePhone(phone.trim())) {
+    errors.phone = "A valid 10-digit phone number is required.";
+  }
+
+  return {
+    valid: Object.keys(errors).length === 0,
+    errors,
+  };
+}
+
+module.exports = {
+  validateRegister,
+  validateLogin,
+  validatePassword,
+  validateUpdateProfile,
+  validateEmail,
+  validatePhone,
+};

@@ -11,6 +11,7 @@ function getWishlistItems(userId) {
       "products.description",
       "products.price",
       "products.stock",
+      "products.availability_type",
       "products.images",
       "products.is_active",
       "products.category_id",

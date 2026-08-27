@@ -1,95 +1,148 @@
-const Address = require("../../models/address.model");
+const {
+  createAddress,
+  getAddressesByUserId,
+  updateAddress,
+  deleteAddress,
+  setDefaultAddress,
+} = require("../../models/address.model");
 
-const addressController = {
-  createAddress: async (req, res) => {
-    try {
-      const userId = req.user.id;
-      const addressData = { ...req.body, user_id: userId };
-      
-      const newAddress = await Address.create(addressData);
-      res.status(201).json({
-        success: true,
-        message: "Address created successfully",
-        data: newAddress,
-      });
-    } catch (error) {
-      console.error("Error creating address:", error);
-      res.status(500).json({ success: false, message: "Error creating address" });
-    }
-  },
+const createAddressController = async (req, res) => {
+  try {
+    const userId = req.user.id;
 
-  getAddresses: async (req, res) => {
-    try {
-      const userId = req.user.id;
-      const addresses = await Address.findByUserId(userId);
-      res.status(200).json({
-        success: true,
-        data: addresses,
-      });
-    } catch (error) {
-      console.error("Error fetching addresses:", error);
-      res.status(500).json({ success: false, message: "Error fetching addresses" });
-    }
-  },
+    const address = await createAddress({
+      ...req.body,
+      user_id: userId,
+    });
 
-  updateAddress: async (req, res) => {
-    try {
-      const userId = req.user.id;
-      const { id } = req.params;
-      
-      const updatedAddress = await Address.update(id, userId, req.body);
-      if (!updatedAddress) {
-        return res.status(404).json({ success: false, message: "Address not found" });
-      }
+    return res.status(201).json({
+      success: true,
+      message: "Address created successfully",
+      data: address,
+    });
+  } catch (error) {
+    console.error("Create address error:", error);
 
-      res.status(200).json({
-        success: true,
-        message: "Address updated successfully",
-        data: updatedAddress,
-      });
-    } catch (error) {
-      console.error("Error updating address:", error);
-      res.status(500).json({ success: false, message: "Error updating address" });
-    }
-  },
-
-  deleteAddress: async (req, res) => {
-    try {
-      const userId = req.user.id;
-      const { id } = req.params;
-      
-      const deleted = await Address.delete(id, userId);
-      if (!deleted) {
-        return res.status(404).json({ success: false, message: "Address not found" });
-      }
-
-      res.status(200).json({
-        success: true,
-        message: "Address deleted successfully",
-      });
-    } catch (error) {
-      console.error("Error deleting address:", error);
-      res.status(500).json({ success: false, message: "Error deleting address" });
-    }
-  },
-  
-  setDefaultAddress: async (req, res) => {
-    try {
-      const userId = req.user.id;
-      const { id } = req.params;
-      
-      await Address.setDefault(id, userId);
-      
-      res.status(200).json({
-        success: true,
-        message: "Default address updated",
-      });
-    } catch (error) {
-      console.error("Error setting default address:", error);
-      res.status(500).json({ success: false, message: "Error setting default address" });
-    }
+    return res.status(500).json({
+      success: false,
+      message: "Error creating address",
+    });
   }
 };
 
-module.exports = addressController;
+const getAddressesController = async (req, res) => {
+  try {
+    const userId = req.user.id;
 
+    const addresses = await getAddressesByUserId(userId);
+
+    return res.status(200).json({
+      success: true,
+      data: addresses,
+    });
+  } catch (error) {
+    console.error("Get addresses error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Error fetching addresses",
+    });
+  }
+};
+
+const updateAddressController = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+
+    const address = await updateAddress(
+      id,
+      userId,
+      req.body
+    );
+
+    if (!address) {
+      return res.status(404).json({
+        success: false,
+        message: "Address not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Address updated successfully",
+      data: address,
+    });
+  } catch (error) {
+    console.error("Update address error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Error updating address",
+    });
+  }
+};
+
+const deleteAddressController = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+
+    const deleted = await deleteAddress(id, userId);
+
+    if (!deleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Address not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Address deleted successfully",
+    });
+  } catch (error) {
+    console.error("Delete address error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Error deleting address",
+    });
+  }
+};
+
+const setDefaultAddressController = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+
+    const updated = await setDefaultAddress(id, userId);
+
+    if (!updated) {
+      return res.status(404).json({
+        success: false,
+        message: "Address not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Default address updated",
+    });
+  } catch (error) {
+    console.error("Set default address error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Error setting default address",
+    });
+  }
+};
+
+module.exports = {
+  createAddressController,
+  getAddressesController,
+  updateAddressController,
+  deleteAddressController,
+  setDefaultAddressController,
+};

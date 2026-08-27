@@ -470,6 +470,12 @@ async function login(req, res) {
       }
     }
 
+    if (
+      !user ||
+      user.role !== "user"
+    )
+      return res.status(404).json({ message: "Invalid credentials" });
+
     // Check phone if provided
     if (phone) {
       user = await findUserByPhone(phone);

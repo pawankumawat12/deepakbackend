@@ -87,7 +87,7 @@ async function getProductById(req, res) {
 
 async function createProductHandler(req, res) {
   try {
-    const { name, description, price, stock, categoryId, isActive } =
+    const { name, description, price, stock, availabilityType, categoryId, isActive } =
       req.body || {};
 
     const images = (req.files || []).map((file) => `/uploads/${file.filename}`);
@@ -96,6 +96,7 @@ async function createProductHandler(req, res) {
       description,
       price,
       stock,
+      availabilityType,
       images,
       categoryId,
       isActive,
@@ -158,6 +159,7 @@ async function updateProductHandler(req, res) {
       description,
       price,
       stock,
+      availabilityType,
       categoryId,
       isActive,
       existingImages,
@@ -221,6 +223,7 @@ async function updateProductHandler(req, res) {
         description,
         price,
         stock,
+        availabilityType,
         images,
         categoryId,
         isActive,

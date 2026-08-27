@@ -7,26 +7,61 @@ const {
   updateItemProductionStatus,
 } = require("../../models/order.model");
 
+const Address = require("../../models/address.model");
+
 async function createOrder(req, res) {
   try {
     const userId = req.user.id;
     const {
-      customerName = req.user.name || "Customer",
+      addressId,
+      customerName: inputName,
       customerEmail = req.user.email || "",
-      customerPhone = "",
-      shippingAddress = "Jaipur, Rajasthan",
-      deliveryAddressJson = null,
+      customerPhone: inputPhone,
+      shippingAddress: inputShippingAddress,
+      deliveryAddressJson: inputDeliveryJson,
       paymentMethod = "Cash on Delivery",
       notes = "",
     } = req.body || {};
 
+    let finalShippingAddress = inputShippingAddress || "";
+    let finalDeliveryJson = inputDeliveryJson || null;
+    let finalCustomerName = inputName || req.user.name || "Customer";
+    let finalCustomerPhone = inputPhone || req.user.phone || "";
+
+    // 1. If addressId is provided, look up saved address
+    if (addressId) {
+      const savedAddress = await Address.getAddressById(addressId, userId);
+      if (savedAddress && Number(savedAddress.user_id) === Number(userId)) {
+        finalCustomerName = savedAddress.receiver_name || finalCustomerName;
+        finalCustomerPhone = savedAddress.phone_number || finalCustomerPhone;
+
+        const parts = [
+          savedAddress.house_number,
+          savedAddress.building_name,
+          savedAddress.landmark ? `Near ${savedAddress.landmark}` : null,
+          savedAddress.formatted_address || `${savedAddress.city}, ${savedAddress.state} - ${savedAddress.pincode}`,
+        ].filter(Boolean);
+
+        finalShippingAddress = parts.join(", ");
+        finalDeliveryJson = savedAddress;
+      }
+    }
+
+    // 2. Validate that address is present
+    if (!finalShippingAddress && !finalDeliveryJson) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select or provide a delivery address before placing your order.",
+      });
+    }
+
     const order = await createOrderWithTransaction({
       userId,
-      customerName,
+      customerName: finalCustomerName,
       customerEmail,
-      customerPhone,
-      shippingAddress,
-      deliveryAddressJson,
+      customerPhone: finalCustomerPhone,
+      shippingAddress: finalShippingAddress,
+      deliveryAddressJson: finalDeliveryJson ? JSON.stringify(finalDeliveryJson) : null,
       paymentMethod,
       notes,
     });

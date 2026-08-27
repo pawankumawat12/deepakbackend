@@ -1,8 +1,13 @@
 const jwt = require("jsonwebtoken");
 
-// Verify access token from cookie
+// Verify access token from cookie or Authorization header
 function verifyToken(req, res, next) {
-  const accessToken = req.cookies.accessToken;
+  const authHeader = req.headers.authorization;
+  const bearerToken =
+    authHeader && authHeader.startsWith("Bearer ")
+      ? authHeader.split(" ")[1]
+      : null;
+  const accessToken = req.cookies?.accessToken || bearerToken;
 
   if (!accessToken) {
     return res.status(401).json({

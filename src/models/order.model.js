@@ -55,7 +55,7 @@ async function createOrderWithTransaction({
       if (!isMadeToOrder) {
         if (stock < quantity) {
           const err = new Error(
-            `Insufficient stock for "${item.name}". Only ${stock} item(s) available in stock.`,
+            `Insufficient stock for "${item.name}". Only ${stock} item(s) available in stock.`
           );
           err.statusCode = 400;
           throw err;
@@ -106,22 +106,24 @@ async function createOrderWithTransaction({
       const isMadeToOrder = item.availability_type === "MADE_TO_ORDER";
       let images = [];
       try {
-        images = typeof item.images === "string" ? JSON.parse(item.images) : item.images;
+        images =
+          typeof item.images === "string"
+            ? JSON.parse(item.images)
+            : item.images;
       } catch {
         images = [];
       }
-      const image = Array.isArray(images) && images.length > 0 ? images[0] : null;
+      const image =
+        Array.isArray(images) && images.length > 0 ? images[0] : null;
 
       if (!isMadeToOrder) {
         // Atomic stock decrease for IN_STOCK
         const currentStock = Number(item.stock) || 0;
         const newStock = Math.max(0, currentStock - quantity);
-        await trx("products")
-          .where({ id: item.product_id })
-          .update({
-            stock: newStock,
-            updated_at: trx.fn.now(),
-          });
+        await trx("products").where({ id: item.product_id }).update({
+          stock: newStock,
+          updated_at: trx.fn.now(),
+        });
       }
 
       orderItemsToInsert.push({
@@ -212,11 +214,7 @@ async function findAllOrders({ page = 1, limit = 20, status, search }) {
   }
 
   const [orders, countRow] = await Promise.all([
-    query
-      .clone()
-      .orderBy("created_at", "desc")
-      .limit(limit)
-      .offset(offset),
+    query.clone().orderBy("created_at", "desc").limit(limit).offset(offset),
     query.clone().count("id as count").first(),
   ]);
 
@@ -328,4 +326,3 @@ module.exports = {
   updateItemProductionStatus,
   cancelOrder,
 };
-

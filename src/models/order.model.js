@@ -295,7 +295,7 @@ async function cancelOrder(orderId, cancelReason) {
       throw new Error("Completed orders cannot be cancelled");
     }
 
-    // Update order status
+    // Update order status09
     const [updatedOrder] = await trx("orders")
       .where({ id: orderId })
       .update({

@@ -51,16 +51,15 @@ async function getSetting(key) {
 }
 
 async function setSetting(key, value) {
-  const serializedValue = typeof value === "object" ? JSON.stringify(value) : value;
+  const serializedValue =
+    typeof value === "object" ? JSON.stringify(value) : value;
 
   const exists = await db("settings").where({ key }).first();
   if (exists) {
-    await db("settings")
-      .where({ key })
-      .update({
-        value: serializedValue,
-        updated_at: db.fn.now(),
-      });
+    await db("settings").where({ key }).update({
+      value: serializedValue,
+      updated_at: db.fn.now(),
+    });
   } else {
     await db("settings").insert({
       key,
@@ -76,7 +75,8 @@ async function setSetting(key, value) {
 async function getThemeSettings() {
   const theme = await getSetting("theme");
   const availableColorThemes =
-    Array.isArray(theme?.availableColorThemes) && theme.availableColorThemes.length > 0
+    Array.isArray(theme?.availableColorThemes) &&
+    theme.availableColorThemes.length > 0
       ? theme.availableColorThemes
       : DEFAULT_COLOR_THEMES;
 
@@ -87,14 +87,19 @@ async function getThemeSettings() {
   };
 }
 
-async function updateThemeSettings({ theme, colorTheme, availableColorThemes }) {
+async function updateThemeSettings({
+  theme,
+  colorTheme,
+  availableColorThemes,
+}) {
   const current = await getThemeSettings();
   const next = {
     theme: theme || current.theme,
     colorTheme: colorTheme || current.colorTheme,
-    availableColorThemes: Array.isArray(availableColorThemes) && availableColorThemes.length > 0
-      ? availableColorThemes
-      : current.availableColorThemes,
+    availableColorThemes:
+      Array.isArray(availableColorThemes) && availableColorThemes.length > 0
+        ? availableColorThemes
+        : current.availableColorThemes,
   };
   await setSetting("theme", next);
   return next;
@@ -141,6 +146,80 @@ async function updateLogoSettings(logoUrl) {
   return data;
 }
 
+const DEFAULT_ORDER_PRICING = {
+  gst_percent: 5,
+  tax_inclusive: false,
+  delivery_charge_type: "fixed", // "fixed" | "per_km"
+  delivery_charge_value: 30,
+  free_delivery_threshold: 500,
+  max_delivery_distance: 15,
+  packaging_fee: 10,
+  cod_fee: 20,
+  platform_fee: 5,
+  minimum_order_amount: 100,
+  store_latitude: 26.9124,
+  store_longitude: 75.7873,
+  discount_percent: 0,
+};
+
+async function getOrderPricingSettings() {
+  const pricing = await getSetting("order_pricing");
+  return { ...DEFAULT_ORDER_PRICING, ...pricing };
+}
+
+async function updateOrderPricingSettings(data) {
+  const current = await getOrderPricingSettings();
+  const next = {
+    gst_percent:
+      data.gst_percent != null ? Number(data.gst_percent) : current.gst_percent,
+    tax_inclusive:
+      data.tax_inclusive != null
+        ? Boolean(data.tax_inclusive)
+        : current.tax_inclusive,
+    delivery_charge_type:
+      data.delivery_charge_type ?? current.delivery_charge_type,
+    delivery_charge_value:
+      data.delivery_charge_value != null
+        ? Number(data.delivery_charge_value)
+        : current.delivery_charge_value,
+    free_delivery_threshold:
+      data.free_delivery_threshold != null
+        ? Number(data.free_delivery_threshold)
+        : current.free_delivery_threshold,
+    max_delivery_distance:
+      data.max_delivery_distance != null
+        ? Number(data.max_delivery_distance)
+        : current.max_delivery_distance,
+    packaging_fee:
+      data.packaging_fee != null
+        ? Number(data.packaging_fee)
+        : current.packaging_fee,
+    cod_fee: data.cod_fee != null ? Number(data.cod_fee) : current.cod_fee,
+    platform_fee:
+      data.platform_fee != null
+        ? Number(data.platform_fee)
+        : current.platform_fee,
+    minimum_order_amount:
+      data.minimum_order_amount != null
+        ? Number(data.minimum_order_amount)
+        : current.minimum_order_amount,
+    store_latitude:
+      data.store_latitude != null
+        ? Number(data.store_latitude)
+        : current.store_latitude,
+    store_longitude:
+      data.store_longitude != null
+        ? Number(data.store_longitude)
+        : current.store_longitude,
+    discount_percent:
+      data.discount_percent != null
+        ? Number(data.discount_percent)
+        : current.discount_percent,
+  };
+  await setSetting("order_pricing", next);
+  return next;
+}
+
 module.exports = {
   DEFAULT_COLOR_THEMES,
   getSetting,
@@ -151,4 +230,7 @@ module.exports = {
   updateFooterSettings,
   getLogoSettings,
   updateLogoSettings,
+  DEFAULT_ORDER_PRICING,
+  getOrderPricingSettings,
+  updateOrderPricingSettings,
 };

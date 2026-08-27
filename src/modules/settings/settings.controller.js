@@ -5,6 +5,8 @@ const {
   updateFooterSettings,
   getLogoSettings,
   updateLogoSettings,
+  getOrderPricingSettings,
+  updateOrderPricingSettings,
 } = require("../../models/settings.model");
 
 const ALLOWED_THEMES = ["light", "dark"];
@@ -78,6 +80,8 @@ module.exports = {
   updateFooter,
   getLogo,
   updateLogo,
+  getOrderPricing,
+  updateOrderPricing,
 };
 
 async function getFooter(req, res) {
@@ -172,6 +176,40 @@ async function updateLogo(req, res) {
     return res.status(500).json({
       success: false,
       message: "Failed to update logo",
+    });
+  }
+}
+
+async function getOrderPricing(req, res) {
+  try {
+    const data = await getOrderPricingSettings();
+    return res.status(200).json({
+      success: true,
+      message: "Order pricing settings fetched successfully",
+      data,
+    });
+  } catch (error) {
+    console.error("Get order pricing error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch order pricing settings",
+    });
+  }
+}
+
+async function updateOrderPricing(req, res) {
+  try {
+    const updated = await updateOrderPricingSettings(req.body);
+    return res.status(200).json({
+      success: true,
+      message: "Order pricing settings updated successfully",
+      data: updated,
+    });
+  } catch (error) {
+    console.error("Update order pricing error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update order pricing settings",
     });
   }
 }

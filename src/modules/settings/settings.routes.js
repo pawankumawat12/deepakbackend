@@ -8,6 +8,8 @@ const {
   updateFooter,
   getLogo,
   updateLogo,
+  getOrderPricing,
+  updateOrderPricing,
 } = require("./settings.controller");
 
 const router = express.Router();
@@ -20,5 +22,8 @@ router.put("/footer", verifyToken, isAdmin, updateFooter);
 
 router.get("/logo", getLogo);
 router.put("/logo", verifyToken, isAdmin, uploadImage.single("logo"), updateLogo);
+
+router.get("/order-pricing", getOrderPricing);
+router.put("/order-pricing", verifyToken, isAdmin, updateOrderPricing);
 
 module.exports = router;

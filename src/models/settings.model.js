@@ -100,10 +100,55 @@ async function updateThemeSettings({ theme, colorTheme, availableColorThemes }) 
   return next;
 }
 
+const DEFAULT_FOOTER = {
+  phone_number: "",
+  email: "",
+  location: "",
+  working_hours: "",
+  instagram: "",
+  facebook: "",
+  twitter: "",
+};
+
+async function getFooterSettings() {
+  const footer = await getSetting("footer");
+  return { ...DEFAULT_FOOTER, ...footer };
+}
+
+async function updateFooterSettings(data) {
+  const current = await getFooterSettings();
+  const next = {
+    phone_number: data.phone_number ?? current.phone_number,
+    email: data.email ?? current.email,
+    location: data.location ?? current.location,
+    working_hours: data.working_hours ?? current.working_hours,
+    instagram: data.instagram ?? current.instagram,
+    facebook: data.facebook ?? current.facebook,
+    twitter: data.twitter ?? current.twitter,
+  };
+  await setSetting("footer", next);
+  return next;
+}
+
+async function getLogoSettings() {
+  const logo = await getSetting("logo");
+  return logo || { logo_url: "" };
+}
+
+async function updateLogoSettings(logoUrl) {
+  const data = { logo_url: logoUrl };
+  await setSetting("logo", data);
+  return data;
+}
+
 module.exports = {
   DEFAULT_COLOR_THEMES,
   getSetting,
   setSetting,
   getThemeSettings,
   updateThemeSettings,
+  getFooterSettings,
+  updateFooterSettings,
+  getLogoSettings,
+  updateLogoSettings,
 };

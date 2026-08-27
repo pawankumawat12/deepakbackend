@@ -1,6 +1,10 @@
 const {
   getThemeSettings,
   updateThemeSettings,
+  getFooterSettings,
+  updateFooterSettings,
+  getLogoSettings,
+  updateLogoSettings,
 } = require("../../models/settings.model");
 
 const ALLOWED_THEMES = ["light", "dark"];
@@ -70,4 +74,104 @@ async function updateTheme(req, res) {
 module.exports = {
   getTheme,
   updateTheme,
+  getFooter,
+  updateFooter,
+  getLogo,
+  updateLogo,
 };
+
+async function getFooter(req, res) {
+  try {
+    const data = await getFooterSettings();
+    return res.status(200).json({
+      success: true,
+      message: "Footer settings fetched successfully",
+      data,
+    });
+  } catch (error) {
+    console.error("Get footer error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch footer settings",
+    });
+  }
+}
+
+async function updateFooter(req, res) {
+  try {
+    const {
+      phone_number,
+      email,
+      location,
+      working_hours,
+      instagram,
+      facebook,
+      twitter,
+    } = req.body;
+
+    const updated = await updateFooterSettings({
+      phone_number,
+      email,
+      location,
+      working_hours,
+      instagram,
+      facebook,
+      twitter,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Footer settings updated successfully",
+      data: updated,
+    });
+  } catch (error) {
+    console.error("Update footer error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update footer settings",
+    });
+  }
+}
+
+async function getLogo(req, res) {
+  try {
+    const data = await getLogoSettings();
+    return res.status(200).json({
+      success: true,
+      message: "Logo settings fetched successfully",
+      data,
+    });
+  } catch (error) {
+    console.error("Get logo error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch logo settings",
+    });
+  }
+}
+
+async function updateLogo(req, res) {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "Logo image file is required",
+      });
+    }
+
+    const logoUrl = `/uploads/${req.file.filename}`;
+    const updated = await updateLogoSettings(logoUrl);
+
+    return res.status(200).json({
+      success: true,
+      message: "Logo updated successfully",
+      data: updated,
+    });
+  } catch (error) {
+    console.error("Update logo error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update logo",
+    });
+  }
+}

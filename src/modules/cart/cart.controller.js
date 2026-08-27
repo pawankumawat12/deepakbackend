@@ -1,58 +1,274 @@
 const { findProductById } = require("../../models/product.model");
-const { getCartItems, findCartItem, upsertCartItem, removeCartItem, clearCart } = require("../../models/cart.model");
+const {
+  getCartItems,
+  findCartItem,
+  upsertCartItem,
+  removeCartItem,
+  clearCart,
+} = require("../../models/cart.model");
 
 function parsePositiveInteger(value) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-async function respondWithCart(res, userId, message) {
-  const items = await getCartItems(userId);
-  return res.status(200).json({ message, data: items });
+function parseImages(images) {
+  if (Array.isArray(images)) return images;
+  if (typeof images === "string") {
+    try {
+      const parsed = JSON.parse(images);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+async function respondWithCart(res, userId, message = "Success") {
+  const rawItems = await getCartItems(userId);
+
+  const items = rawItems.map((item) => {
+    const price = Number(item.price) || 0;
+    const quantity = Number(item.quantity) || 0;
+    const stock = Number(item.stock) || 0;
+    const itemTotal = price * quantity;
+    const images = parseImages(item.images);
+    const availabilityType = item.availability_type || "IN_STOCK";
+    const isMadeToOrder = availabilityType === "MADE_TO_ORDER";
+
+    const isOutOfStock = !item.is_active || (!isMadeToOrder && stock <= 0);
+    const exceedsStock = !isMadeToOrder && quantity > stock;
+    const isMaxStockReached = !isMadeToOrder && quantity >= stock && stock > 0;
+
+    let stockMessage = null;
+    if (!item.is_active) {
+      stockMessage = "Unavailable";
+    } else if (isMadeToOrder) {
+      stockMessage = "Made to Order";
+    } else if (stock <= 0) {
+      stockMessage = "Out of stock";
+    } else if (exceedsStock) {
+      stockMessage = `Only ${stock} left in stock. Please reduce quantity to proceed.`;
+    } else if (isMaxStockReached) {
+      stockMessage = `Max stock reached (Only ${stock} available)`;
+    } else if (stock <= 5) {
+      stockMessage = `Only ${stock} left in stock`;
+    }
+
+    return {
+      id: item.product_id,
+      cart_item_id: item.cart_item_id,
+      product_id: item.product_id,
+      name: item.name,
+      description: item.description,
+      price,
+      stock,
+      availableStock: isMadeToOrder ? null : stock,
+      availability_type: availabilityType,
+      isMadeToOrder,
+      images,
+      image: images[0] || null,
+      is_active: Boolean(item.is_active),
+      category_id: item.category_id,
+      category_name: item.category_name || "Menu",
+      quantity,
+      itemTotal,
+      isOutOfStock,
+      exceedsStock,
+      isMaxStockReached,
+      stockMessage,
+      added_at: item.added_at,
+      updated_at: item.updated_at,
+    };
+  });
+
+  const totalItems = items.reduce((sum, it) => sum + it.quantity, 0);
+  const subtotal = items.reduce((sum, it) => sum + it.itemTotal, 0);
+  const deliveryFee = 0; // Free delivery
+  const discount = 0;
+  const grandTotal = Math.max(0, subtotal + deliveryFee - discount);
+  const stockProblemItems = items.filter((it) => it.isOutOfStock || it.exceedsStock);
+
+  const summary = {
+    totalItems,
+    itemTypesCount: items.length,
+    subtotal,
+    deliveryFee,
+    discount,
+    grandTotal,
+    hasOutOfStockItems: stockProblemItems.length > 0,
+    outOfStockCount: stockProblemItems.length,
+  };
+
+  return res.status(200).json({
+    success: true,
+    message,
+    data: {
+      items,
+      summary,
+    },
+  });
 }
 
 async function getCart(req, res) {
-  try { return respondWithCart(res, req.user.id, "Cart fetched successfully"); }
-  catch (error) { console.error("Get cart error:", error); return res.status(500).json({ message: "Server error" }); }
+  try {
+    return await respondWithCart(res, req.user.id, "Cart fetched successfully");
+  } catch (error) {
+    console.error("Get cart error:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
 }
 
 async function addCartItem(req, res) {
   try {
     const productId = parsePositiveInteger(req.body?.productId);
     const quantity = parsePositiveInteger(req.body?.quantity || 1);
-    if (!productId || !quantity) return res.status(400).json({ message: "productId and quantity must be positive integers" });
+
+    if (!productId || !quantity) {
+      return res.status(400).json({
+        success: false,
+        message: "productId and quantity must be positive integers",
+      });
+    }
+
     const product = await findProductById(productId);
-    if (!product || !product.is_active) return res.status(404).json({ message: "Product is not available" });
+    if (!product || !product.is_active) {
+      return res.status(404).json({
+        success: false,
+        message: "This product is currently not available",
+      });
+    }
+
+    const isMadeToOrder = product.availability_type === "MADE_TO_ORDER";
+    const productStock = Number(product.stock) || 0;
     const current = await findCartItem(req.user.id, productId);
-    const requestedQuantity = (current?.quantity || 0) + quantity;
-    if (product.stock < requestedQuantity) return res.status(400).json({ message: `Only ${product.stock} item(s) are available`, availableStock: product.stock });
-    await upsertCartItem(req.user.id, productId, requestedQuantity);
-    return respondWithCart(res, req.user.id, "Item added to cart");
-  } catch (error) { console.error("Add cart item error:", error); return res.status(500).json({ message: "Server error" }); }
+    const currentQty = Number(current?.quantity) || 0;
+    const requestedTotal = currentQty + quantity;
+
+    if (!isMadeToOrder) {
+      if (productStock <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "This item is currently out of stock",
+          availableStock: 0,
+        });
+      }
+
+      if (currentQty >= productStock) {
+        return res.status(400).json({
+          success: false,
+          message: `Maximum available stock (${productStock} items) already reached in your cart`,
+          availableStock: productStock,
+          currentQuantityInCart: currentQty,
+        });
+      }
+
+      if (requestedTotal > productStock) {
+        return res.status(400).json({
+          success: false,
+          message: `Only ${productStock} item(s) are available in stock. You already have ${currentQty} in your cart.`,
+          availableStock: productStock,
+          currentQuantityInCart: currentQty,
+          canAdd: productStock - currentQty,
+        });
+      }
+    }
+
+    await upsertCartItem(req.user.id, productId, requestedTotal);
+    return await respondWithCart(res, req.user.id, "Item added to cart");
+  } catch (error) {
+    console.error("Add cart item error:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
 }
 
 async function updateCartItem(req, res) {
   try {
     const productId = parsePositiveInteger(req.params.productId);
     const quantity = Number(req.body?.quantity);
-    if (!productId || !Number.isInteger(quantity) || quantity < 0) return res.status(400).json({ message: "quantity must be a non-negative integer" });
-    if (quantity === 0) { await removeCartItem(req.user.id, productId); return respondWithCart(res, req.user.id, "Item removed from cart"); }
+
+    if (!productId || !Number.isInteger(quantity) || quantity < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "quantity must be a non-negative integer",
+      });
+    }
+
+    if (quantity === 0) {
+      await removeCartItem(req.user.id, productId);
+      return await respondWithCart(res, req.user.id, "Item removed from cart");
+    }
+
     const product = await findProductById(productId);
-    if (!product || !product.is_active) return res.status(404).json({ message: "Product is not available" });
-    if (product.stock < quantity) return res.status(400).json({ message: `Only ${product.stock} item(s) are available`, availableStock: product.stock });
+    if (!product || !product.is_active) {
+      return res.status(404).json({
+        success: false,
+        message: "Product is not available",
+      });
+    }
+
+    const isMadeToOrder = product.availability_type === "MADE_TO_ORDER";
+    const productStock = Number(product.stock) || 0;
+
+    if (!isMadeToOrder) {
+      if (productStock <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "This item is currently out of stock",
+          availableStock: 0,
+        });
+      }
+
+      if (quantity > productStock) {
+        return res.status(400).json({
+          success: false,
+          message: `Only ${productStock} item(s) are available in stock`,
+          availableStock: productStock,
+        });
+      }
+    }
+
     await upsertCartItem(req.user.id, productId, quantity);
-    return respondWithCart(res, req.user.id, "Cart item updated");
-  } catch (error) { console.error("Update cart item error:", error); return res.status(500).json({ message: "Server error" }); }
+    return await respondWithCart(res, req.user.id, "Cart item updated");
+  } catch (error) {
+    console.error("Update cart item error:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
 }
 
 async function deleteCartItem(req, res) {
-  try { await removeCartItem(req.user.id, parsePositiveInteger(req.params.productId)); return respondWithCart(res, req.user.id, "Item removed from cart"); }
-  catch (error) { console.error("Delete cart item error:", error); return res.status(500).json({ message: "Server error" }); }
+  try {
+    const productId = parsePositiveInteger(req.params.productId);
+    if (!productId) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid product id",
+      });
+    }
+
+    await removeCartItem(req.user.id, productId);
+    return await respondWithCart(res, req.user.id, "Item removed from cart");
+  } catch (error) {
+    console.error("Delete cart item error:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
 }
 
 async function deleteCart(req, res) {
-  try { await clearCart(req.user.id); return res.status(200).json({ message: "Cart cleared", data: [] }); }
-  catch (error) { console.error("Clear cart error:", error); return res.status(500).json({ message: "Server error" }); }
+  try {
+    await clearCart(req.user.id);
+    return await respondWithCart(res, req.user.id, "Cart cleared successfully");
+  } catch (error) {
+    console.error("Clear cart error:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
 }
 
-module.exports = { getCart, addCartItem, updateCartItem, deleteCartItem, deleteCart };
+module.exports = {
+  getCart,
+  addCartItem,
+  updateCartItem,
+  deleteCartItem,
+  deleteCart,
+};

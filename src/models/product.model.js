@@ -6,6 +6,7 @@ const PRODUCT_COLUMNS = [
   "products.description",
   "products.price",
   "products.stock",
+  "products.availability_type",
   "products.images",
   "products.category_id",
   "products.is_active",
@@ -35,6 +36,7 @@ function findProducts({
   offset,
   categoryId,
   isActive,
+  availabilityType,
   search,
   sortBy = "products.created_at",
   sortOrder = "desc",
@@ -54,6 +56,10 @@ function findProducts({
     query = query.where("products.is_active", isActive);
   }
 
+  if (availabilityType !== undefined) {
+    query = query.where("products.availability_type", availabilityType);
+  }
+
   if (search) {
     query = query.where(function () {
       this.whereILike("products.name", `%${search}%`).orWhereILike(
@@ -69,7 +75,7 @@ function findProducts({
     .offset(offset);
 }
 
-function countProducts({ categoryId, isActive, search }) {
+function countProducts({ categoryId, isActive, availabilityType, search }) {
   let query = db("products");
 
   if (categoryId !== undefined) {
@@ -78,6 +84,10 @@ function countProducts({ categoryId, isActive, search }) {
 
   if (isActive !== undefined) {
     query = query.where({ is_active: isActive });
+  }
+
+  if (availabilityType !== undefined) {
+    query = query.where({ availability_type: availabilityType });
   }
 
   if (search) {
@@ -112,6 +122,7 @@ function createProduct(data) {
       "description",
       "price",
       "stock",
+      "availability_type",
       "images",
       "category_id",
       "is_active",
@@ -131,6 +142,7 @@ function updateProduct(id, data) {
       "description",
       "price",
       "stock",
+      "availability_type",
       "images",
       "category_id",
       "is_active",

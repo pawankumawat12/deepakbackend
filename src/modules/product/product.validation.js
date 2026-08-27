@@ -23,9 +23,12 @@ const PRODUCT_SORT_COLUMNS = {
   category: "categories.name",
   price: "products.price",
   stock: "products.stock",
+  availabilityType: "products.availability_type",
   status: "products.is_active",
   createdAt: "products.created_at",
 };
+
+const VALID_AVAILABILITY_TYPES = ["IN_STOCK", "MADE_TO_ORDER"];
 
 function validatePrice(price) {
   const parsed = Number(price);
@@ -42,6 +45,7 @@ function validateProductCreate({
   price,
   images,
   stock,
+  availabilityType,
   categoryId,
   isActive,
 }) {
@@ -64,17 +68,33 @@ function validateProductCreate({
   if (!Array.isArray(images) || images.length === 0) {
     errors.images = "At least one image is required.";
   }
+
   const parsedPrice = validatePrice(price);
   if (parsedPrice === null) {
     errors.price = "Price is required and must be a non-negative number.";
   }
 
+  const normalizedAvailType = availabilityType
+    ? String(availabilityType).toUpperCase().trim()
+    : "IN_STOCK";
+
+  if (!VALID_AVAILABILITY_TYPES.includes(normalizedAvailType)) {
+    errors.availabilityType = `Invalid availability type. Allowed values: ${VALID_AVAILABILITY_TYPES.join(", ")}`;
+  }
+
   let parsedStock = 0;
-  if (stock !== undefined && stock !== null && stock !== "") {
-    parsedStock = Number(stock);
-    if (!Number.isInteger(parsedStock) || parsedStock < 0) {
-      errors.stock = "Stock must be a non-negative integer.";
+  if (normalizedAvailType === "IN_STOCK") {
+    if (stock === undefined || stock === null || stock === "") {
+      errors.stock = "Available stock quantity is required for in-stock products.";
+    } else {
+      parsedStock = Number(stock);
+      if (!Number.isInteger(parsedStock) || parsedStock < 0) {
+        errors.stock = "Stock must be a non-negative integer.";
+      }
     }
+  } else {
+    // MADE_TO_ORDER does not require a stock quantity
+    parsedStock = 0;
   }
 
   const parsedCategoryId = Number(categoryId);
@@ -99,6 +119,7 @@ function validateProductCreate({
           : String(description).trim(),
       price: parsedPrice,
       stock: parsedStock,
+      availability_type: normalizedAvailType,
       images,
       category_id: parsedCategoryId,
       is_active: parsedIsActive === undefined ? true : parsedIsActive,
@@ -111,6 +132,7 @@ function validateProductUpdate({
   description,
   price,
   stock,
+  availabilityType,
   images,
   categoryId,
   isActive,
@@ -138,8 +160,8 @@ function validateProductUpdate({
   if (description !== undefined) {
     if (description !== null && typeof description !== "string") {
       errors.description = "Description must be a string.";
-    } else if (description && description.length > 500) {
-      errors.description = "Description must not exceed 500 characters.";
+    } else if (description && description.length > 5000) {
+      errors.description = "Description must not exceed 5000 characters.";
     } else {
       data.description = description === null ? null : description.trim();
     }
@@ -154,7 +176,19 @@ function validateProductUpdate({
     }
   }
 
-  if (stock !== undefined) {
+  if (availabilityType !== undefined) {
+    const normalizedAvailType = String(availabilityType).toUpperCase().trim();
+    if (!VALID_AVAILABILITY_TYPES.includes(normalizedAvailType)) {
+      errors.availabilityType = `Invalid availability type. Allowed values: ${VALID_AVAILABILITY_TYPES.join(", ")}`;
+    } else {
+      data.availability_type = normalizedAvailType;
+      if (normalizedAvailType === "MADE_TO_ORDER") {
+        data.stock = 0;
+      }
+    }
+  }
+
+  if (stock !== undefined && data.availability_type !== "MADE_TO_ORDER") {
     const parsedStock = Number(stock);
     if (!Number.isInteger(parsedStock) || parsedStock < 0) {
       errors.stock = "Stock must be a non-negative integer.";
@@ -195,6 +229,7 @@ function validateProductUpdate({
 function validateProductListQuery({
   categoryId,
   isActive,
+  availabilityType,
   search,
   sortBy,
   sortOrder,
@@ -217,6 +252,15 @@ function validateProductListQuery({
       errors.isActive = "isActive must be a boolean value.";
     } else {
       filters.isActive = parsedIsActive;
+    }
+  }
+
+  if (availabilityType !== undefined) {
+    const normalized = String(availabilityType).toUpperCase().trim();
+    if (!VALID_AVAILABILITY_TYPES.includes(normalized)) {
+      errors.availabilityType = `Invalid availability type. Allowed values: ${VALID_AVAILABILITY_TYPES.join(", ")}`;
+    } else {
+      filters.availabilityType = normalized;
     }
   }
 

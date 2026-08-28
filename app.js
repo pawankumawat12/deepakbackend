@@ -9,6 +9,8 @@ const wishlistRoutes = require("./src/modules/wishlist/wishlist.routes");
 const settingsRoutes = require("./src/modules/settings/settings.routes");
 const orderRoutes = require("./src/modules/order/order.routes");
 const addressRoutes = require("./src/modules/address/address.routes");
+const chatRoutes = require("./src/modules/chat/chat.routes");
+const notificationRoutes = require("./src/modules/notification/notification.routes");
 const cookieParser = require("cookie-parser");
 
 const app = express();
@@ -36,6 +38,8 @@ app.use("/api/v1/orders", orderRoutes);
 app.use("/api/v1/wishlist", wishlistRoutes);
 app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/addresses", addressRoutes);
+app.use("/api/v1/chat", chatRoutes);
+app.use("/api/v1/notifications", notificationRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

@@ -1,7 +1,9 @@
 require("dotenv").config();
+const http = require("http");
 
 const app = require("./app");
 const db = require("./config/db");
+const { initSocket } = require("./src/socket/socket.service");
 
 const PORT = process.env.PORT || 5000;
 
@@ -19,8 +21,11 @@ async function startServer() {
     console.error("Database migration error on startup:", err.message);
   }
 
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+  const httpServer = http.createServer(app);
+  initSocket(httpServer);
+
+  httpServer.listen(PORT, () => {
+    console.log(`Server and Socket.IO running on port ${PORT}`);
   });
 }
 

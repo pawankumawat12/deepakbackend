@@ -5,9 +5,20 @@ const {
   findAllOrders,
   updateOrderStatus,
   updateItemProductionStatus,
+  cancelOrder,
+  submitPaymentConfirmation,
+  updateOrderPaymentStatus,
+  acceptOrder,
+  rejectOrder,
 } = require("../../models/order.model");
 
 const Address = require("../../models/address.model");
+const notificationModel = require("../../models/notification.model");
+const {
+  emitToAdmin,
+  emitToUser,
+  emitToOrder,
+} = require("../../socket/socket.service");
 
 async function createOrder(req, res) {
   try {
@@ -20,6 +31,9 @@ async function createOrder(req, res) {
       shippingAddress: inputShippingAddress,
       deliveryAddressJson: inputDeliveryJson,
       paymentMethod = "Cash on Delivery",
+      paymentStatus,
+      transactionId,
+      paymentDetailsJson,
       notes = "",
     } = req.body || {};
 
@@ -55,16 +69,68 @@ async function createOrder(req, res) {
       });
     }
 
+    let parsedDeliveryJson = finalDeliveryJson;
+    if (typeof parsedDeliveryJson === "string") {
+      try {
+        parsedDeliveryJson = JSON.parse(parsedDeliveryJson);
+      } catch {}
+    }
+
     const order = await createOrderWithTransaction({
       userId,
       customerName: finalCustomerName,
       customerEmail,
       customerPhone: finalCustomerPhone,
       shippingAddress: finalShippingAddress,
-      deliveryAddressJson: finalDeliveryJson ? JSON.stringify(finalDeliveryJson) : null,
+      deliveryAddressJson: parsedDeliveryJson,
       paymentMethod,
+      paymentStatus,
+      transactionId,
+      paymentDetailsJson,
       notes,
     });
+
+    const isOnline =
+      paymentMethod.toLowerCase().includes("online") ||
+      paymentMethod.toLowerCase().includes("upi");
+
+    // Create Admin Notification in Database
+    await notificationModel.createNotification({
+      role: "admin",
+      type: isOnline ? "payment_received" : "order_created",
+      title: isOnline
+        ? `New Online Payment Order: #${order.order_number || order.id}`
+        : `New Order: #${order.order_number || order.id}`,
+      message: `${finalCustomerName} placed an order worth ₹${order.total_amount} via ${paymentMethod}.`,
+      orderId: order.id,
+      dataJson: {
+        orderId: order.id,
+        orderNumber: order.order_number || `#SFC-${order.id}`,
+        customerName: finalCustomerName,
+        totalAmount: order.total_amount,
+        paymentMethod,
+        paymentStatus: order.payment_status,
+        transactionId: order.transaction_id,
+      },
+    });
+
+    // Real-time Socket.IO emission to admin
+    emitToAdmin("admin_new_order", {
+      order,
+      isOnline,
+      message: `New order #${order.order_number || order.id} from ${finalCustomerName}`,
+    });
+
+    if (isOnline && order.transaction_id) {
+      emitToAdmin("admin_payment_received", {
+        orderId: order.id,
+        orderNumber: order.order_number || `#SFC-${order.id}`,
+        customerName: finalCustomerName,
+        amount: order.total_amount,
+        transactionId: order.transaction_id,
+        paymentStatus: order.payment_status,
+      });
+    }
 
     return res.status(201).json({
       success: true,
@@ -161,6 +227,32 @@ async function updateStatus(req, res) {
     }
 
     const updated = await updateOrderStatus(orderId, status);
+    const order = await findOrderById(orderId);
+
+    // Real-time notification to customer
+    if (order && order.user_id) {
+      await notificationModel.createNotification({
+        userId: order.user_id,
+        role: "customer",
+        type: "order_status",
+        title: `Order Status: ${status}`,
+        message: `Your order #${order.order_number || order.id} is now ${status}.`,
+        orderId: order.id,
+        dataJson: { orderId: order.id, status },
+      });
+
+      emitToUser(order.user_id, "order_status_updated", {
+        orderId: order.id,
+        orderNumber: order.order_number || `#SFC-${order.id}`,
+        status,
+      });
+    }
+
+    emitToOrder(orderId, "order_status_updated", {
+      orderId,
+      status,
+    });
+
     return res.status(200).json({
       success: true,
       message: "Order status updated successfully",
@@ -171,6 +263,120 @@ async function updateStatus(req, res) {
     return res.status(500).json({
       success: false,
       message: "Failed to update order status",
+    });
+  }
+}
+
+async function acceptOrderController(req, res) {
+  try {
+    const orderId = Number(req.params.id);
+    const { paymentStatus, notes } = req.body || {};
+
+    const updated = await acceptOrder(orderId, { paymentStatus, notes });
+
+    // Notify customer in real-time
+    if (updated && updated.user_id) {
+      await notificationModel.createNotification({
+        userId: updated.user_id,
+        role: "customer",
+        type: "order_accepted",
+        title: `Order Accepted! 🎉`,
+        message: `Your order #${updated.order_number || updated.id} has been confirmed and is now being prepared in the kitchen.`,
+        orderId: updated.id,
+        dataJson: { orderId: updated.id, status: updated.status, paymentStatus: updated.payment_status },
+      });
+
+      emitToUser(updated.user_id, "order_accepted", {
+        orderId: updated.id,
+        orderNumber: updated.order_number || `#SFC-${updated.id}`,
+        status: updated.status,
+        paymentStatus: updated.payment_status,
+      });
+
+      emitToUser(updated.user_id, "order_status_updated", {
+        orderId: updated.id,
+        orderNumber: updated.order_number || `#SFC-${updated.id}`,
+        status: updated.status,
+      });
+    }
+
+    emitToOrder(orderId, "order_status_updated", {
+      orderId,
+      status: updated.status,
+      paymentStatus: updated.payment_status,
+    });
+
+    emitToAdmin("admin_order_updated", {
+      order: updated,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Order accepted successfully and kitchen preparation started",
+      data: updated,
+    });
+  } catch (error) {
+    console.error("Accept order error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to accept order",
+    });
+  }
+}
+
+async function rejectOrderController(req, res) {
+  try {
+    const orderId = Number(req.params.id);
+    const { cancelReason = "Order rejected by store" } = req.body || {};
+
+    const updated = await rejectOrder(orderId, { cancelReason });
+
+    // Notify customer in real-time
+    if (updated && updated.user_id) {
+      await notificationModel.createNotification({
+        userId: updated.user_id,
+        role: "customer",
+        type: "order_rejected",
+        title: `Order Declined ⚠️`,
+        message: `Your order #${updated.order_number || updated.id} could not be accepted. Reason: ${cancelReason}`,
+        orderId: updated.id,
+        dataJson: { orderId: updated.id, status: "Cancelled", cancelReason },
+      });
+
+      emitToUser(updated.user_id, "order_rejected", {
+        orderId: updated.id,
+        orderNumber: updated.order_number || `#SFC-${updated.id}`,
+        status: "Cancelled",
+        cancelReason,
+      });
+
+      emitToUser(updated.user_id, "order_status_updated", {
+        orderId: updated.id,
+        orderNumber: updated.order_number || `#SFC-${updated.id}`,
+        status: "Cancelled",
+      });
+    }
+
+    emitToOrder(orderId, "order_status_updated", {
+      orderId,
+      status: "Cancelled",
+      cancelReason,
+    });
+
+    emitToAdmin("admin_order_updated", {
+      order: updated,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Order rejected and inventory restored",
+      data: updated,
+    });
+  } catch (error) {
+    console.error("Reject order error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to reject order",
     });
   }
 }
@@ -213,8 +419,23 @@ async function cancelUserOrder(req, res) {
       return res.status(400).json({ success: false, message: "Cancel reason is required" });
     }
 
-    const { cancelOrder } = require("../../models/order.model");
     const updated = await cancelOrder(orderId, cancelReason);
+
+    // Notify Admin
+    await notificationModel.createNotification({
+      role: "admin",
+      type: "order_status",
+      title: `Order Cancelled by Customer: #${updated.order_number || updated.id}`,
+      message: `Customer cancelled order. Reason: ${cancelReason}`,
+      orderId: updated.id,
+      dataJson: { orderId: updated.id, cancelReason },
+    });
+
+    emitToAdmin("admin_order_cancelled", {
+      orderId: updated.id,
+      orderNumber: updated.order_number || `#SFC-${updated.id}`,
+      cancelReason,
+    });
 
     return res.status(200).json({
       success: true,
@@ -230,6 +451,122 @@ async function cancelUserOrder(req, res) {
   }
 }
 
+async function confirmPayment(req, res) {
+  try {
+    const orderId = Number(req.params.id);
+    const userId = req.user.id;
+    const { transactionId, paymentApp, paymentDetails } = req.body || {};
+
+    if (!transactionId && !paymentApp) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a transaction reference or payment app name.",
+      });
+    }
+
+    const updatedOrder = await submitPaymentConfirmation(orderId, userId, {
+      transactionId: transactionId ? String(transactionId).trim() : undefined,
+      paymentApp: paymentApp ? String(paymentApp).trim() : undefined,
+      paymentDetails,
+    });
+
+    // Notify Admin about submitted payment proof
+    await notificationModel.createNotification({
+      role: "admin",
+      type: "payment_received",
+      title: `Payment Proof Submitted: #${updatedOrder.order_number || updatedOrder.id}`,
+      message: `UTR: ${updatedOrder.transaction_id || "N/A"} via ${paymentApp || "UPI"} for ₹${updatedOrder.total_amount}.`,
+      orderId: updatedOrder.id,
+      dataJson: {
+        orderId: updatedOrder.id,
+        transactionId: updatedOrder.transaction_id,
+        paymentApp,
+        totalAmount: updatedOrder.total_amount,
+      },
+    });
+
+    emitToAdmin("admin_payment_received", {
+      orderId: updatedOrder.id,
+      orderNumber: updatedOrder.order_number || `#SFC-${updatedOrder.id}`,
+      customerName: updatedOrder.customer_name,
+      amount: updatedOrder.total_amount,
+      transactionId: updatedOrder.transaction_id,
+      paymentApp,
+      paymentStatus: updatedOrder.payment_status,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Payment confirmation submitted successfully. We are verifying your payment.",
+      data: updatedOrder,
+    });
+  } catch (error) {
+    console.error("Confirm payment error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to confirm payment",
+    });
+  }
+}
+
+async function updatePaymentStatusController(req, res) {
+  try {
+    const orderId = Number(req.params.id);
+    const { paymentStatus } = req.body;
+
+    const allowed = ["Pending", "Pending Verification", "Paid", "Failed", "Refunded"];
+    if (!paymentStatus || !allowed.includes(paymentStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid payment status. Allowed: ${allowed.join(", ")}`,
+      });
+    }
+
+    const updated = await updateOrderPaymentStatus(orderId, paymentStatus);
+    const order = await findOrderById(orderId);
+
+    // Notify Customer in real-time
+    if (order && order.user_id) {
+      await notificationModel.createNotification({
+        userId: order.user_id,
+        role: "customer",
+        type: "payment_status",
+        title: `Payment Status: ${paymentStatus}`,
+        message: `Payment status for Order #${order.order_number || order.id} is now ${paymentStatus}.`,
+        orderId: order.id,
+        dataJson: { orderId: order.id, paymentStatus },
+      });
+
+      emitToUser(order.user_id, "payment_status_updated", {
+        orderId: order.id,
+        orderNumber: order.order_number || `#SFC-${order.id}`,
+        paymentStatus,
+      });
+    }
+
+    emitToOrder(orderId, "payment_status_updated", {
+      orderId,
+      paymentStatus,
+    });
+
+    emitToAdmin("admin_order_updated", {
+      order: updated,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Payment status updated successfully",
+      data: updated,
+    });
+  } catch (error) {
+    console.error("Update payment status error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to update payment status",
+    });
+  }
+}
+
 module.exports = {
   createOrder,
   getUserOrders,
@@ -238,5 +575,8 @@ module.exports = {
   updateStatus,
   markItemProduced,
   cancelUserOrder,
+  confirmPayment,
+  updatePaymentStatusController,
+  acceptOrderController,
+  rejectOrderController,
 };
-

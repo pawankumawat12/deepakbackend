@@ -6,6 +6,8 @@ const {
   removeCartItem,
   clearCart,
 } = require("../../models/cart.model");
+const { getAddressesByUserId, getAddressById } = require("../../models/address.model");
+const { calculateCartAndOrderPricing } = require("../../utils/pricing.util");
 
 function parsePositiveInteger(value) {
   const parsed = Number(value);
@@ -25,7 +27,7 @@ function parseImages(images) {
   return [];
 }
 
-async function respondWithCart(res, userId, message = "Success") {
+async function respondWithCart(res, userId, message = "Success", options = {}) {
   const rawItems = await getCartItems(userId);
 
   const items = rawItems.map((item) => {
@@ -83,22 +85,69 @@ async function respondWithCart(res, userId, message = "Success") {
     };
   });
 
-  const totalItems = items.reduce((sum, it) => sum + it.quantity, 0);
-  const subtotal = items.reduce((sum, it) => sum + it.itemTotal, 0);
-  const deliveryFee = 0; // Free delivery
-  const discount = 0;
-  const grandTotal = Math.max(0, subtotal + deliveryFee - discount);
+  // Get delivery address for distance calculations
+  let deliveryAddress = null;
+  if (options.addressId) {
+    deliveryAddress = await getAddressById(options.addressId, userId);
+  }
+  if (!deliveryAddress) {
+    const userAddresses = await getAddressesByUserId(userId);
+    deliveryAddress = userAddresses.find((a) => a.is_default) || userAddresses[0] || null;
+  }
+
+  // Calculate pricing completely on the backend
+  const pricing = await calculateCartAndOrderPricing({
+    items,
+    deliveryAddress,
+    paymentMethod: options.paymentMethod || "Cash on Delivery",
+  });
+
   const stockProblemItems = items.filter((it) => it.isOutOfStock || it.exceedsStock);
 
   const summary = {
-    totalItems,
-    itemTypesCount: items.length,
-    subtotal,
-    deliveryFee,
-    discount,
-    grandTotal,
+    totalItems: pricing.total_items,
+    itemTypesCount: pricing.item_types_count,
+    subtotal: pricing.subtotal,
+    discountPercent: pricing.discount_percent,
+    discount: pricing.discount,
+    discountedSubtotal: pricing.discounted_subtotal,
+
+    gstPercent: pricing.gst_percent,
+    taxInclusive: pricing.tax_inclusive,
+    taxAmount: pricing.tax_amount,
+    taxAddedToTotal: pricing.tax_added_to_total,
+    taxLabel: pricing.tax_label,
+
+    deliveryChargeType: pricing.delivery_charge_type,
+    deliveryChargeValue: pricing.delivery_charge_value,
+    deliveryFee: pricing.delivery_fee,
+    isFreeDelivery: pricing.is_free_delivery,
+    freeDeliveryThreshold: pricing.free_delivery_threshold,
+    freeDeliverySavings: pricing.free_delivery_savings,
+    freeDeliveryShortfall: pricing.free_delivery_shortfall,
+
+    distanceKm: pricing.distance_km,
+    maxDeliveryDistance: pricing.max_delivery_distance,
+    isOutOfRange: pricing.is_out_of_range,
+
+    packagingFee: pricing.packaging_fee,
+    platformFee: pricing.platform_fee,
+    codFee: pricing.cod_fee,
+    isCod: pricing.is_cod,
+
+    minimumOrderAmount: pricing.minimum_order_amount,
+    isBelowMinimumOrder: pricing.is_below_minimum_order,
+    minimumOrderShortfall: pricing.minimum_order_shortfall,
+
+    grandTotal: pricing.grand_total,
     hasOutOfStockItems: stockProblemItems.length > 0,
     outOfStockCount: stockProblemItems.length,
+
+    timer: {
+      calculatedAt: pricing.calculated_at,
+      expiresAt: pricing.expires_at,
+      validForSeconds: pricing.valid_for_seconds,
+    },
   };
 
   return res.status(200).json({
@@ -107,13 +156,20 @@ async function respondWithCart(res, userId, message = "Success") {
     data: {
       items,
       summary,
+      pricing,
+      deliveryAddress,
     },
   });
 }
 
 async function getCart(req, res) {
   try {
-    return await respondWithCart(res, req.user.id, "Cart fetched successfully");
+    const addressId = req.query.addressId ? Number(req.query.addressId) : null;
+    const paymentMethod = req.query.paymentMethod || "Cash on Delivery";
+    return await respondWithCart(res, req.user.id, "Cart fetched successfully", {
+      addressId,
+      paymentMethod,
+    });
   } catch (error) {
     console.error("Get cart error:", error);
     return res.status(500).json({ success: false, message: "Server error" });

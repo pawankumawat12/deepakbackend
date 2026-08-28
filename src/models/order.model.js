@@ -1,4 +1,5 @@
 const db = require("../../config/db");
+const { calculateCartAndOrderPricing } = require("../utils/pricing.util");
 
 function generateOrderNumber() {
   const timestamp = Date.now().toString().slice(-5);
@@ -14,6 +15,9 @@ async function createOrderWithTransaction({
   shippingAddress,
   deliveryAddressJson,
   paymentMethod = "Cash on Delivery",
+  paymentStatus,
+  transactionId,
+  paymentDetailsJson,
   notes,
 }) {
   return db.transaction(async (trx) => {
@@ -43,38 +47,58 @@ async function createOrderWithTransaction({
     // 2. Validate availability and stock
     for (const item of rawCartItems) {
       if (!item.is_active) {
-        const err = new Error(`"${item.name}" is currently not available`);
+        const err = new Error(
+          `Item "${item.name}" is currently unavailable. Please remove it from your cart.`
+        );
         err.statusCode = 400;
         throw err;
       }
-
-      const isMadeToOrder = item.availability_type === "MADE_TO_ORDER";
-      const stock = Number(item.stock) || 0;
-      const quantity = Number(item.quantity) || 1;
-
-      if (!isMadeToOrder) {
-        if (stock < quantity) {
-          const err = new Error(
-            `Insufficient stock for "${item.name}". Only ${stock} item(s) available in stock.`
-          );
-          err.statusCode = 400;
-          throw err;
-        }
+      if (
+        item.availability_type !== "MADE_TO_ORDER" &&
+        item.stock < item.quantity
+      ) {
+        const err = new Error(
+          `Item "${item.name}" only has ${item.stock} in stock. Please adjust quantity.`
+        );
+        err.statusCode = 400;
+        throw err;
       }
     }
 
-    // 3. Compute totals
-    let subtotal = 0;
-    for (const item of rawCartItems) {
-      const price = Number(item.price) || 0;
-      const quantity = Number(item.quantity) || 1;
-      subtotal += price * quantity;
-    }
-    const deliveryFee = 0;
-    const discount = 0;
-    const totalAmount = Math.max(0, subtotal + deliveryFee - discount);
+    // 3. Recalculate complete pricing atomically with latest settings
+    const pricing = await calculateCartAndOrderPricing({
+      items: rawCartItems,
+      deliveryAddress: deliveryAddressJson,
+      paymentMethod,
+    });
 
-    // 4. Create Order Record
+    if (pricing.is_below_minimum_order) {
+      const err = new Error(
+        `Minimum order amount is ₹${pricing.minimum_order_amount}. Please add items worth ₹${pricing.minimum_order_shortfall} more to proceed.`
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+
+    if (pricing.is_out_of_range) {
+      const err = new Error(
+        `Your delivery address is ${pricing.distance_km} km away, which exceeds our maximum delivery radius of ${pricing.max_delivery_distance} km.`
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const isOnline =
+      paymentMethod &&
+      !paymentMethod.toLowerCase().includes("cash") &&
+      !paymentMethod.toLowerCase().includes("cod");
+    const initialPaymentStatus = isOnline
+      ? transactionId
+        ? "Pending Verification"
+        : "Pending"
+      : "Pending";
+
+    // 4. Create Order Record with full pricing snapshot
     const orderNumber = generateOrderNumber();
     const [order] = await trx("orders")
       .insert({
@@ -85,12 +109,22 @@ async function createOrderWithTransaction({
         customer_phone: customerPhone,
         shipping_address: shippingAddress,
         delivery_address_json: deliveryAddressJson,
-        subtotal,
-        delivery_fee: deliveryFee,
-        discount,
-        total_amount: totalAmount,
+        subtotal: pricing.subtotal,
+        delivery_fee: pricing.delivery_fee,
+        discount: pricing.discount,
+        tax_amount: pricing.tax_amount,
+        packaging_fee: pricing.packaging_fee,
+        platform_fee: pricing.platform_fee,
+        cod_fee: pricing.cod_fee,
+        distance_km: pricing.distance_km || 0,
+        tax_inclusive: pricing.tax_inclusive,
+        total_amount: pricing.grand_total,
+        pricing_details_json: pricing,
         status: "Preparing",
-        payment_method: paymentMethod,
+        payment_method: isOnline ? (paymentMethod || "Online Payment") : "Cash on Delivery",
+        payment_status: paymentStatus || initialPaymentStatus,
+        transaction_id: transactionId || null,
+        payment_details_json: paymentDetailsJson || null,
         notes,
         created_at: trx.fn.now(),
         updated_at: trx.fn.now(),
@@ -155,6 +189,34 @@ async function createOrderWithTransaction({
   });
 }
 
+function formatOrderRow(order) {
+  if (!order) return null;
+  let deliveryAddressJson = order.delivery_address_json;
+  if (typeof deliveryAddressJson === "string") {
+    try {
+      deliveryAddressJson = JSON.parse(deliveryAddressJson);
+    } catch {}
+  }
+  let pricingDetailsJson = order.pricing_details_json;
+  if (typeof pricingDetailsJson === "string") {
+    try {
+      pricingDetailsJson = JSON.parse(pricingDetailsJson);
+    } catch {}
+  }
+  let paymentDetailsJson = order.payment_details_json;
+  if (typeof paymentDetailsJson === "string") {
+    try {
+      paymentDetailsJson = JSON.parse(paymentDetailsJson);
+    } catch {}
+  }
+  return {
+    ...order,
+    delivery_address_json: deliveryAddressJson,
+    pricing_details_json: pricingDetailsJson,
+    payment_details_json: paymentDetailsJson,
+  };
+}
+
 async function findOrdersByUser(userId) {
   const orders = await db("orders")
     .where({ user_id: userId })
@@ -174,7 +236,7 @@ async function findOrdersByUser(userId) {
   });
 
   return orders.map((o) => ({
-    ...o,
+    ...formatOrderRow(o),
     items: itemsByOrder[o.id] || [],
   }));
 }
@@ -192,7 +254,7 @@ async function findOrderById(orderId, userId = null) {
     .orderBy("id", "asc");
 
   return {
-    ...order,
+    ...formatOrderRow(order),
     items,
   };
 }
@@ -245,7 +307,7 @@ async function findAllOrders({ page = 1, limit = 20, status, search }) {
 
   return {
     orders: orders.map((o) => ({
-      ...o,
+      ...formatOrderRow(o),
       items: itemsByOrder[o.id] || [],
     })),
     pagination: {
@@ -317,6 +379,88 @@ async function cancelOrder(orderId, cancelReason) {
   });
 }
 
+async function submitPaymentConfirmation(orderId, userId, { transactionId, paymentApp, paymentDetails }) {
+  const order = await db("orders")
+    .where({ id: orderId })
+    .modify((query) => {
+      if (userId) query.where({ user_id: userId });
+    })
+    .first();
+
+  if (!order) {
+    throw new Error("Order not found or unauthorized");
+  }
+
+  let existingDetails = {};
+  if (order.payment_details_json) {
+    existingDetails =
+      typeof order.payment_details_json === "string"
+        ? JSON.parse(order.payment_details_json)
+        : order.payment_details_json;
+  }
+
+  const updatedDetails = {
+    ...existingDetails,
+    ...paymentDetails,
+    payment_app: paymentApp || existingDetails.payment_app || "UPI App",
+    transaction_id: transactionId || order.transaction_id,
+    confirmed_at: new Date().toISOString(),
+  };
+
+  const [updatedOrder] = await db("orders")
+    .where({ id: orderId })
+    .update({
+      transaction_id: transactionId || order.transaction_id,
+      payment_status: "Pending Verification",
+      payment_details_json: updatedDetails,
+      updated_at: db.fn.now(),
+    })
+    .returning("*");
+
+  return formatOrderRow(updatedOrder);
+}
+
+async function updateOrderPaymentStatus(orderId, paymentStatus) {
+  const [updated] = await db("orders")
+    .where({ id: orderId })
+    .update({
+      payment_status: paymentStatus,
+      updated_at: db.fn.now(),
+    })
+    .returning("*");
+  return formatOrderRow(updated);
+}
+
+async function acceptOrder(orderId, { paymentStatus = null, notes = null } = {}) {
+  const order = await db("orders").where({ id: orderId }).first();
+  if (!order) {
+    throw new Error("Order not found");
+  }
+
+  const updatePayload = {
+    status: "Preparing",
+    updated_at: db.fn.now(),
+  };
+
+  if (paymentStatus) {
+    updatePayload.payment_status = paymentStatus;
+  }
+  if (notes) {
+    updatePayload.notes = notes;
+  }
+
+  const [updated] = await db("orders")
+    .where({ id: orderId })
+    .update(updatePayload)
+    .returning("*");
+
+  return formatOrderRow(updated);
+}
+
+async function rejectOrder(orderId, { cancelReason = "Order rejected by store" } = {}) {
+  return cancelOrder(orderId, cancelReason);
+}
+
 module.exports = {
   createOrderWithTransaction,
   findOrdersByUser,
@@ -325,4 +469,8 @@ module.exports = {
   updateOrderStatus,
   updateItemProductionStatus,
   cancelOrder,
+  submitPaymentConfirmation,
+  updateOrderPaymentStatus,
+  acceptOrder,
+  rejectOrder,
 };

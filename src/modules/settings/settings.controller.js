@@ -7,6 +7,8 @@ const {
   updateLogoSettings,
   getOrderPricingSettings,
   updateOrderPricingSettings,
+  getPaymentQrSettings,
+  updatePaymentQrSettings,
 } = require("../../models/settings.model");
 
 const ALLOWED_THEMES = ["light", "dark"];
@@ -213,3 +215,59 @@ async function updateOrderPricing(req, res) {
     });
   }
 }
+
+async function getPaymentQr(req, res) {
+  try {
+    const data = await getPaymentQrSettings();
+    return res.status(200).json({
+      success: true,
+      message: "Payment QR settings fetched successfully",
+      data,
+    });
+  } catch (error) {
+    console.error("Get payment QR error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch payment QR settings",
+    });
+  }
+}
+
+async function updatePaymentQr(req, res) {
+  try {
+    const updateData = { ...req.body };
+    if (req.file) {
+      updateData.qr_code_url = `/uploads/${req.file.filename}`;
+    }
+
+    if (updateData.is_enabled !== undefined) {
+      updateData.is_enabled = updateData.is_enabled === "true" || updateData.is_enabled === true;
+    }
+
+    const updated = await updatePaymentQrSettings(updateData);
+    return res.status(200).json({
+      success: true,
+      message: "Payment QR settings updated successfully",
+      data: updated,
+    });
+  } catch (error) {
+    console.error("Update payment QR error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update payment QR settings",
+    });
+  }
+}
+
+module.exports = {
+  getTheme,
+  updateTheme,
+  getFooter,
+  updateFooter,
+  getLogo,
+  updateLogo,
+  getOrderPricing,
+  updateOrderPricing,
+  getPaymentQr,
+  updatePaymentQr,
+};

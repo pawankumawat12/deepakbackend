@@ -32,14 +32,49 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-const uploadImage = multer({
-    storage,
-    fileFilter,
-    limits: {
-      fileSize: 10 * 1024 * 1024,
-    },
-  });
-  
-  module.exports = {
-    uploadImage,
-  };
+const chatFileFilter = (req, file, cb) => {
+  const allowedImageTypes = [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/jpg",
+    "image/gif",
+  ];
+  const allowedDocTypes = [
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/plain",
+    "text/csv",
+    "application/zip",
+    "application/x-zip-compressed",
+  ];
+
+  if (
+    allowedImageTypes.includes(file.mimetype) ||
+    allowedDocTypes.includes(file.mimetype)
+  ) {
+    cb(null, true);
+  } else {
+    cb(
+      new Error(
+        "Supported file formats: JPG, PNG, WEBP, GIF, PDF, DOC, DOCX, XLS, XLSX, TXT, CSV, ZIP"
+      )
+    );
+  }
+};
+
+const uploadChatAttachment = multer({
+  storage,
+  fileFilter: chatFileFilter,
+  limits: {
+    fileSize: 25 * 1024 * 1024, // 25 MB max
+  },
+});
+
+module.exports = {
+  uploadImage,
+  uploadChatAttachment,
+};

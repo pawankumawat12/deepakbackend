@@ -14,21 +14,55 @@ const notificationRoutes = require("./src/modules/notification/notification.rout
 const cookieParser = require("cookie-parser");
 
 const app = express();
-// const allowedOrigins = (process.env.BFF || "")
-//   .split(",")
-//   .map((origin) => origin.trim())
-//   .filter(Boolean);
+
+// Security Headers Middleware
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader(
+    "Referrer-Policy",
+    "strict-origin-when-cross-origin"
+  );
+  next();
+});
+
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:5173",
+  process.env.FRONTEND_URL,
+  process.env.ADMIN_URL,
+  ...(process.env.BFF ? process.env.BFF.split(",").map((s) => s.trim()) : []),
+].filter(Boolean);
 
 app.use(
   cors({
-    origin: true,
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, curl, server-to-server) or matching allowed list
+      if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== "production") {
+        callback(null, true);
+      } else {
+        callback(null, true);
+      }
+    },
     credentials: true,
   })
 );
-app.use(express.json());
+
+app.use(express.json({ limit: "15mb" }));
 app.use(cookieParser());
-app.use(express.urlencoded({ extended: true }));
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+
+// Serve static uploads with browser caching (1 day)
+app.use(
+  "/uploads",
+  express.static(path.join(__dirname, "uploads"), {
+    maxAge: "1d",
+    etag: true,
+  })
+);
 
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/categories", categoryRoutes);

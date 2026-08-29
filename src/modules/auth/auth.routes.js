@@ -14,6 +14,7 @@ const {
   verifyPasswordResetToken,
   resetPassword,
   updateProfile,
+  getCustomers,
 } = require("./auth.controller");
 const { verifyToken, isAdmin } = require("../../../middleware/auth.middleware");
 const { countAdmins } = require("../../models/auth.model");
@@ -42,10 +43,10 @@ router.get("/reset-password/:accessToken", verifyPasswordResetToken);
 router.post("/reset-password/:accessToken", resetPassword);
 router.post("/register", register);
 
-
 router.post("/verify-otp", verifyOtp);
 router.get("/me", verifyToken, getMe);
 router.put("/profile", verifyToken, uploadImage.single("image"), updateProfile);
+router.get("/customers", verifyToken, isAdmin, getCustomers);
 router.post("/refresh-token", refreshAccessToken);
 router.post("/logout", logout);
 router.post("/register-admin", allowInitialAdmin, registerAdmin);

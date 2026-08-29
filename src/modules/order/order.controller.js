@@ -455,18 +455,16 @@ async function confirmPayment(req, res) {
   try {
     const orderId = Number(req.params.id);
     const userId = req.user.id;
-    const { transactionId, paymentApp, paymentDetails } = req.body || {};
-
-    if (!transactionId && !paymentApp) {
-      return res.status(400).json({
-        success: false,
-        message: "Please provide a transaction reference or payment app name.",
-      });
-    }
+    const { transactionId, paymentDetails } = req.body || {};
+    let paymentApp =
+      req.body?.paymentApp ||
+      paymentDetails?.app ||
+      paymentDetails?.paymentApp ||
+      "UPI App";
 
     const updatedOrder = await submitPaymentConfirmation(orderId, userId, {
       transactionId: transactionId ? String(transactionId).trim() : undefined,
-      paymentApp: paymentApp ? String(paymentApp).trim() : undefined,
+      paymentApp: String(paymentApp).trim(),
       paymentDetails,
     });
 

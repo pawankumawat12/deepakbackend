@@ -9,38 +9,67 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
+// Allowed extensions whitelist
+const ALLOWED_IMAGE_EXTENSIONS = new Set([
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".webp",
+  ".gif",
+]);
+
+const ALLOWED_DOC_EXTENSIONS = new Set([
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".txt",
+  ".csv",
+  ".zip",
+]);
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
+    // Sanitize extension and generate unguessable unique file name
+    const rawExt = path.extname(file.originalname || "").toLowerCase();
+    const safeExt = rawExt.replace(/[^a-z0-9.]/g, "") || ".dat";
     const uniqueName = `${Date.now()}-${Math.round(
       Math.random() * 1e9
-    )}${path.extname(file.originalname)}`;
+    )}${safeExt}`;
 
     cb(null, uniqueName);
-  },    
+  },
 });
 
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/jpg"];
+  const allowedMimeTypes = [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/jpg",
+  ];
+  const ext = path.extname(file.originalname || "").toLowerCase();
 
-  if (allowedTypes.includes(file.mimetype)) {
+  if (allowedMimeTypes.includes(file.mimetype) && ALLOWED_IMAGE_EXTENSIONS.has(ext)) {
     cb(null, true);
   } else {
-    cb(new Error("Only JPG, JPEG, PNG and WEBP images are allowed"));
+    cb(new Error("Only JPG, JPEG, PNG, and WEBP image files are allowed."));
   }
 };
 
 const chatFileFilter = (req, file, cb) => {
-  const allowedImageTypes = [
+  const allowedImageMimeTypes = [
     "image/jpeg",
     "image/png",
     "image/webp",
     "image/jpg",
     "image/gif",
   ];
-  const allowedDocTypes = [
+  const allowedDocMimeTypes = [
     "application/pdf",
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -52,10 +81,15 @@ const chatFileFilter = (req, file, cb) => {
     "application/x-zip-compressed",
   ];
 
-  if (
-    allowedImageTypes.includes(file.mimetype) ||
-    allowedDocTypes.includes(file.mimetype)
-  ) {
+  const ext = path.extname(file.originalname || "").toLowerCase();
+  const isImage =
+    allowedImageMimeTypes.includes(file.mimetype) &&
+    ALLOWED_IMAGE_EXTENSIONS.has(ext);
+  const isDoc =
+    allowedDocMimeTypes.includes(file.mimetype) &&
+    ALLOWED_DOC_EXTENSIONS.has(ext);
+
+  if (isImage || isDoc) {
     cb(null, true);
   } else {
     cb(
@@ -65,6 +99,14 @@ const chatFileFilter = (req, file, cb) => {
     );
   }
 };
+
+const uploadImage = multer({
+  storage,
+  fileFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10 MB max
+  },
+});
 
 const uploadChatAttachment = multer({
   storage,

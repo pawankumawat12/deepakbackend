@@ -68,6 +68,35 @@ const sendPasswordResetEmail = async ({ email, resetUrl }) => {
   }
 };
 
+async function listCustomers({ search } = {}) {
+  let query = db("users")
+    .leftJoin("orders", "users.id", "orders.user_id")
+    .select(
+      "users.id",
+      "users.name",
+      "users.email",
+      "users.phone",
+      "users.role",
+      "users.created_at",
+      db.raw("COUNT(orders.id) as orders_count"),
+      db.raw("COALESCE(SUM(orders.total_amount), 0) as total_spent")
+    )
+    .where("users.role", "!=", "admin")
+    .groupBy("users.id")
+    .orderBy("users.created_at", "desc");
+
+  if (search) {
+    query = query.where((builder) => {
+      builder
+        .whereILike("users.name", `%${search}%`)
+        .orWhereILike("users.email", `%${search}%`)
+        .orWhereILike("users.phone", `%${search}%`);
+    });
+  }
+
+  return await query;
+}
+
 module.exports = {
   findUserByEmail,
   countAdmins,
@@ -77,4 +106,5 @@ module.exports = {
   sendPasswordResetEmail,
   updateUser,
   findUserById,
+  listCustomers,
 };

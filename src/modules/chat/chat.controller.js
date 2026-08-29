@@ -50,6 +50,7 @@ async function getOrderMessages(req, res) {
 async function postOrderMessage(req, res) {
   try {
     const { id: orderId } = req.params;
+    const user = req.user;
     const { message } = req.body || {};
     let attachmentUrl = req.body?.attachmentUrl || null;
     let attachmentType = req.body?.attachmentType || null;

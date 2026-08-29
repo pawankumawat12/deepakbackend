@@ -17,6 +17,7 @@ const {
   sendOtp: sendOtpEmail,
   sendPasswordResetEmail,
   updateUser,
+  listCustomers,
 } = require("../../models/auth.model");
 const {
   generateAccessToken,
@@ -272,7 +273,7 @@ const sendOtp = async (req, res) => {
 
 const verifyOtp = async (req, res) => {
   try {
-    const { email, otp } = req.body;
+    const { email, otp } = req.body || {};
 
     if (!email || !otp) {
       return res.status(400).json({
@@ -280,7 +281,8 @@ const verifyOtp = async (req, res) => {
       });
     }
 
-    const user = await findUserByEmail(email);
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await findUserByEmail(normalizedEmail);
 
     if (!user) {
       return res.status(404).json({
@@ -290,20 +292,20 @@ const verifyOtp = async (req, res) => {
 
     if (!user.expire_at || new Date() > new Date(user.expire_at)) {
       return res.status(400).json({
-        message: "OTP expired",
+        message: "OTP has expired. Please click resend to get a new code.",
       });
     }
 
-    if (user.otp !== otp) {
+    if (String(user.otp).trim() !== String(otp).trim()) {
       return res.status(400).json({
-        message: "Invalid OTP",
+        message: "Invalid OTP code. Please check and try again.",
       });
     }
 
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
-    //store into cookie
+    // store into cookie
     res.cookie("accessToken", accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
@@ -326,7 +328,8 @@ const verifyOtp = async (req, res) => {
     });
 
     return res.status(200).json({
-      message: "OTP verified successfully",
+      message: "OTP verified successfully. Your account is now active!",
+      token: accessToken,
       user: {
         id: user.id,
         name: user.name,
@@ -363,12 +366,41 @@ async function register(req, res) {
       });
     }
 
-    if (email) {
-      const existingUser = await findUserByEmail(email);
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const normalizedEmail = email ? email.trim().toLowerCase() : null;
+
+    if (normalizedEmail) {
+      const existingUser = await findUserByEmail(normalizedEmail);
 
       if (existingUser) {
-        return res.status(400).json({
-          message: "Email already registered",
+        // If email is ALREADY VERIFIED, it is permanently registered
+        if (existingUser.is_email_verified) {
+          return res.status(400).json({
+            message: "Email is already registered. Please log in.",
+          });
+        }
+
+        // If email was submitted previously but NOT verified, update the credentials and issue fresh OTP
+        await updateUser(existingUser.id, {
+          name: name ? name.trim() : existingUser.name,
+          phone: phone ? phone.trim() : existingUser.phone,
+          password: hashedPassword,
+        });
+
+        const result = await issueVerificationOtp(
+          existingUser,
+          normalizedEmail,
+          updateUser,
+          { resetResendPolicy: true }
+        );
+
+        return res.status(200).json({
+          message: "Verification code sent to your email.",
+          data: {
+            messageId: result.messageId,
+            email: normalizedEmail,
+            requiresVerification: true,
+          },
         });
       }
     }
@@ -377,36 +409,36 @@ async function register(req, res) {
     if (phone) {
       const existingUser = await findUserByPhone(phone);
 
-      if (existingUser) {
+      if (existingUser && existingUser.is_email_verified) {
         return res.status(400).json({
-          message: "Phone number dosen't registered",
+          message: "Phone number is already associated with another account",
         });
       }
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-
     const user = await createUser({
-      name,
-      email: email || null,
+      name: name.trim(),
+      email: normalizedEmail,
       phone: phone || null,
       password: hashedPassword,
       role: "user",
       is_email_verified: false,
     });
 
-    const result = await issueVerificationOtp(user, email, updateUser, {
+    const result = await issueVerificationOtp(user, normalizedEmail, updateUser, {
       resetResendPolicy: true,
     });
 
     return res.status(201).json({
-      message: "User registered successfully",
+      message: "User registered successfully. Verification code sent to your email.",
       data: {
         messageId: result.messageId,
+        email: normalizedEmail,
+        requiresVerification: true,
       },
     });
   } catch (error) {
-    console.error(error);
+    console.error("Registration error:", error);
 
     return res.status(500).json({
       message: "Server error",
@@ -439,7 +471,7 @@ async function registerAdmin(req, res) {
     const admin = await createUser({
       name,
       email,
-      password: hashedPassword,
+      password,
       role: "admin",
       is_email_verified: true,
     });
@@ -453,7 +485,7 @@ async function registerAdmin(req, res) {
 
 async function login(req, res) {
   try {
-    const { email, phone, password } = req.body;
+    const { email, phone, password } = req.body || {};
     const { valid, errors } = validateLogin({ email, password, phone });
 
     if (!valid) {
@@ -461,20 +493,19 @@ async function login(req, res) {
     }
     let user;
     if (email) {
-      user = await findUserByEmail(email);
+      const normalizedEmail = email.trim().toLowerCase();
+      user = await findUserByEmail(normalizedEmail);
 
       if (!user) {
         return res.status(400).json({
-          message: "Email dose not registered",
+          message: "Email is not registered",
         });
       }
     }
 
-    if (
-      !user ||
-      user.role !== "user"
-    )
+    if (!user || user.role !== "user") {
       return res.status(404).json({ message: "Invalid credentials" });
+    }
 
     // Check phone if provided
     if (phone) {
@@ -482,7 +513,7 @@ async function login(req, res) {
 
       if (!user) {
         return res.status(400).json({
-          message: "Phone number dose not registered",
+          message: "Phone number is not registered",
         });
       }
     }
@@ -491,9 +522,22 @@ async function login(req, res) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
+    // If user's email is NOT verified, generate fresh OTP, send it, and prompt verification!
     if (!user.is_email_verified) {
+      const otpResult = await issueVerificationOtp(
+        user,
+        user.email,
+        updateUser
+      );
       return res.status(403).json({
-        message: "Please verify your email before logging in",
+        requiresVerification: true,
+        email: user.email,
+        message:
+          "Your email is not verified yet. A fresh verification OTP has been sent to your email.",
+        data: {
+          email: user.email,
+          messageId: otpResult.messageId,
+        },
       });
     }
 
@@ -521,7 +565,7 @@ async function login(req, res) {
         id: user.id,
         name: user.name,
         email: user.email,
-        token: user.accessToken,
+        token: accessToken,
         phone: user.phone,
         role: user.role,
         image: user.image,
@@ -720,6 +764,24 @@ const updateProfile = async (req, res) => {
   }
 };
 
+const getCustomers = async (req, res) => {
+  try {
+    const { search } = req.query;
+    const customers = await listCustomers({ search });
+    return res.status(200).json({
+      success: true,
+      message: "Customers fetched successfully",
+      data: customers,
+    });
+  } catch (error) {
+    console.error("Get customers error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch customers",
+    });
+  }
+};
+
 module.exports = {
   forgotPassword,
   verifyPasswordResetToken,
@@ -734,4 +796,5 @@ module.exports = {
   getMe,
   logout,
   updateProfile,
+  getCustomers,
 };

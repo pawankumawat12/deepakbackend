@@ -17,8 +17,15 @@ const {
   sendOtp: sendOtpEmail,
   sendPasswordResetEmail,
   updateUser,
+  deleteUser,
   listCustomers,
+  createBlockedCustomerRequest,
+  listBlockedCustomerRequests,
+  findBlockedRequestById,
+  updateBlockedCustomerRequest,
 } = require("../../models/auth.model");
+const notificationModel = require("../../models/notification.model");
+const { emitToAdmin, emitToUser } = require("../../socket/socket.service");
 const {
   generateAccessToken,
   generateRefreshToken,
@@ -147,31 +154,54 @@ const resendVerificationOtp = async (
 const forgotPassword = async (req, res) => {
   try {
     const email = req.body?.email?.trim().toLowerCase();
+    const requestedRole = req.body?.role?.trim().toLowerCase();
+
     if (!email) return res.status(400).json({ message: "Email is required" });
     const user = await findUserByEmail(email);
-    // Always use the same response so this endpoint cannot reveal registered emails.
-    if (user) {
-      const resetToken = crypto.randomBytes(32).toString("base64url");
-      const resetUrlBase =
-        user.role === "admin"
-          ? process.env.ADMIN_URL || "http://localhost:5173"
-          : process.env.FRONTEND_URL || "http://localhost:3000";
-      const resetUrl = `${resetUrlBase}/reset-password?token=${encodeURIComponent(
-        resetToken
-      )}`;
 
-      await updateUser(user.id, {
-        password_reset_token: hashResetToken(resetToken),
-        password_reset_expires_at: new Date(
-          Date.now() + PASSWORD_RESET_EXPIRY_MS
-        ),
-      });
-      await sendPasswordResetEmail({ email, resetUrl });
+    if (!user) {
+      return res.status(404).json({ message: "Email does not exist" });
     }
+
+    // Role-based authorization: prevent admin accounts from resetting via customer frontend, and vice-versa
+    const origin = String(req.headers.origin || req.headers.referer || "");
+    const isAdminSource = requestedRole === "admin" || origin.includes("5173");
+
+    if (isAdminSource) {
+      if (user.role !== "admin") {
+        return res.status(403).json({
+          message: "Email does not exist",
+        });
+      }
+    } else {
+      // Customer frontend source
+      if (user.role === "admin") {
+        return res.status(403).json({
+          message: "Email does not exist",
+        });
+      }
+    }
+
+    const resetToken = crypto.randomBytes(32).toString("base64url");
+    const resetUrlBase =
+      user.role === "admin"
+        ? process.env.ADMIN_URL || "http://localhost:5173"
+        : process.env.FRONTEND_URL || "http://localhost:3000";
+    const resetUrl = `${resetUrlBase}/reset-password?token=${encodeURIComponent(
+      resetToken
+    )}`;
+
+    await updateUser(user.id, {
+      password_reset_token: hashResetToken(resetToken),
+      password_reset_expires_at: new Date(
+        Date.now() + PASSWORD_RESET_EXPIRY_MS
+      ),
+    });
+    await sendPasswordResetEmail({ email, resetUrl });
 
     return res.status(200).json({
       message:
-        "If that email is registered, a password reset link has been sent.",
+        "A password reset link has been sent to your email. Please check your inbox.",
     });
   } catch (error) {
     console.error("Forgot password error:", error);
@@ -235,7 +265,13 @@ const resetPassword = async (req, res) => {
 
 const sendOtp = async (req, res) => {
   try {
-    const { email } = req.body;
+    let email =
+      typeof req.body === "string"
+        ? req.body
+        : req.body?.email || req.query?.email;
+    if (typeof email === "string") {
+      email = email.trim().toLowerCase();
+    }
 
     if (!email) {
       return res.status(400).json({
@@ -569,6 +605,9 @@ async function login(req, res) {
         phone: user.phone,
         role: user.role,
         image: user.image,
+        is_active: user.is_active !== false,
+        is_blocked: Boolean(user.is_blocked),
+        block_reason: user.block_reason || null,
       },
     });
   } catch (error) {
@@ -664,6 +703,9 @@ const getMe = async (req, res) => {
         phone: user.phone,
         role: user.role,
         image: user.image,
+        is_active: user.is_active !== false,
+        is_blocked: Boolean(user.is_blocked),
+        block_reason: user.block_reason || null,
       },
     });
   } catch (error) {
@@ -782,6 +824,253 @@ const getCustomers = async (req, res) => {
   }
 };
 
+async function editCustomer(req, res) {
+  try {
+    const customerId = Number(req.params.id);
+    const { name, email, phone } = req.body || {};
+
+    const existing = await findUserById(customerId);
+    if (!existing || existing.role === "admin") {
+      return res
+        .status(404)
+        .json({ success: false, message: "Customer not found" });
+    }
+
+    const updated = await updateUser(customerId, {
+      name: name ? name.trim() : existing.name,
+      email: email ? email.trim().toLowerCase() : existing.email,
+      phone: phone ? phone.trim() : existing.phone,
+      updated_at: new Date(),
+    });
+
+    const updatedUser = Array.isArray(updated) ? updated[0] : updated;
+
+    return res.status(200).json({
+      success: true,
+      message: "Customer updated successfully",
+      data: updatedUser,
+    });
+  } catch (error) {
+    console.error("Edit customer error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to update customer" });
+  }
+}
+
+async function removeCustomer(req, res) {
+  try {
+    const customerId = Number(req.params.id);
+    const existing = await findUserById(customerId);
+    if (!existing || existing.role === "admin") {
+      return res
+        .status(404)
+        .json({ success: false, message: "Customer not found" });
+    }
+
+    await deleteUser(customerId);
+    return res.status(200).json({
+      success: true,
+      message: "Customer deleted successfully",
+    });
+  } catch (error) {
+    console.error("Delete customer error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to delete customer" });
+  }
+}
+
+async function toggleCustomerStatus(req, res) {
+  try {
+    const customerId = Number(req.params.id);
+    const { is_active, is_blocked, block_reason } = req.body || {};
+
+    const existing = await findUserById(customerId);
+    if (!existing || existing.role === "admin") {
+      return res
+        .status(404)
+        .json({ success: false, message: "Customer not found" });
+    }
+
+    const nextBlocked =
+      typeof is_blocked === "boolean" ? is_blocked : !existing.is_blocked;
+    const nextActive =
+      typeof is_active === "boolean" ? is_active : !nextBlocked;
+
+    const updated = await updateUser(customerId, {
+      is_blocked: nextBlocked,
+      is_active: nextActive,
+      block_reason: nextBlocked
+        ? block_reason || "Account deactivated by administrator."
+        : null,
+      blocked_at: nextBlocked ? new Date() : null,
+      updated_at: new Date(),
+    });
+
+    const updatedUser = Array.isArray(updated) ? updated[0] : updated;
+
+    // Real-time notification to the customer via Socket.IO
+    emitToUser(customerId, "customer_status_changed", {
+      userId: customerId,
+      is_blocked: nextBlocked,
+      is_active: nextActive,
+      block_reason: updatedUser.block_reason,
+    });
+
+    // Notify all admins
+    emitToAdmin("admin_customer_status_updated", {
+      customerId,
+      customerName: existing.name,
+      is_blocked: nextBlocked,
+      is_active: nextActive,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: nextBlocked
+        ? "Customer blocked successfully"
+        : "Customer unblocked and activated",
+      data: updatedUser,
+    });
+  } catch (error) {
+    console.error("Toggle customer status error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to update customer status" });
+  }
+}
+
+async function submitBlockedSupportRequest(req, res) {
+  try {
+    const { name, email, phone, message } = req.body || {};
+    if (!email || !message) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Email and message are required" });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await findUserByEmail(normalizedEmail);
+
+    const supportReq = await createBlockedCustomerRequest({
+      user_id: user ? user.id : null,
+      name: (name || user?.name || "Customer").trim(),
+      email: normalizedEmail,
+      phone: phone || user?.phone || null,
+      message: message.trim(),
+      status: "pending",
+    });
+
+    // Notify Admin via Notification model & Socket.IO
+    await notificationModel.createNotification({
+      role: "admin",
+      type: "customer_unblock_request",
+      title: `Unblock Request from ${supportReq.name}`,
+      message: supportReq.message.slice(0, 120),
+      dataJson: supportReq,
+    });
+
+    emitToAdmin("new_blocked_support_request", {
+      requestId: supportReq.id,
+      userId: supportReq.user_id,
+      name: supportReq.name,
+      email: supportReq.email,
+      phone: supportReq.phone,
+      message: supportReq.message,
+      createdAt: supportReq.created_at,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message:
+        "Your request has been submitted to the admin. We will review it shortly.",
+      data: supportReq,
+    });
+  } catch (error) {
+    console.error("Blocked support request error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to submit request" });
+  }
+}
+
+async function getBlockedSupportRequests(req, res) {
+  try {
+    const { status } = req.query;
+    const list = await listBlockedCustomerRequests({ status });
+    return res.status(200).json({ success: true, data: list });
+  } catch (error) {
+    console.error("Get blocked requests error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch requests" });
+  }
+}
+
+async function resolveBlockedSupportRequest(req, res) {
+  try {
+    const requestId = Number(req.params.id);
+    const { status, admin_response } = req.body || {};
+
+    if (!["approved", "rejected"].includes(status)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Status must be approved or rejected" });
+    }
+
+    const request = await findBlockedRequestById(requestId);
+    if (!request) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Request not found" });
+    }
+
+    const resolved = await updateBlockedCustomerRequest(requestId, {
+      status,
+      admin_response:
+        admin_response ||
+        (status === "approved"
+          ? "Your account has been unblocked by the administrator."
+          : "Your unblock request was rejected."),
+      resolved_at: new Date(),
+    });
+
+    // If approved, unblock the user!
+    if (status === "approved" && request.user_id) {
+      await updateUser(request.user_id, {
+        is_blocked: false,
+        is_active: true,
+        block_reason: null,
+        blocked_at: null,
+      });
+
+      emitToUser(request.user_id, "customer_status_changed", {
+        userId: request.user_id,
+        is_blocked: false,
+        is_active: true,
+        message: "Your account has been unblocked by the administrator.",
+      });
+    }
+
+    emitToAdmin("blocked_request_resolved", resolved);
+
+    return res.status(200).json({
+      success: true,
+      message:
+        status === "approved"
+          ? "Request approved and customer unblocked"
+          : "Request rejected",
+      data: resolved,
+    });
+  } catch (error) {
+    console.error("Resolve blocked request error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to resolve request" });
+  }
+}
+
 module.exports = {
   forgotPassword,
   verifyPasswordResetToken,
@@ -797,4 +1086,11 @@ module.exports = {
   logout,
   updateProfile,
   getCustomers,
+  editCustomer,
+  removeCustomer,
+  toggleCustomerStatus,
+  submitBlockedSupportRequest,
+  getBlockedSupportRequests,
+  resolveBlockedSupportRequest,
 };
+

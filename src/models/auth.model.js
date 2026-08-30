@@ -9,8 +9,8 @@ function findUserByPhone(phone) {
   return db("users").where({ phone }).first();
 }
 
-function findUserById(id){
-  return db("users").where({id}).first();
+function findUserById(id) {
+  return db("users").where({ id }).first();
 }
 
 function countAdmins() {
@@ -24,16 +24,39 @@ function countAdmins() {
 function createUser(data) {
   return db("users")
     .insert(data)
-    .returning(["id", "name", "email", "phone", "role", "image"])
+    .returning([
+      "id",
+      "name",
+      "email",
+      "phone",
+      "role",
+      "image",
+      "is_active",
+      "is_blocked",
+      "block_reason",
+    ])
     .then((rows) => rows[0]);
 }
-
 
 function updateUser(id, data) {
   return db("users")
     .where({ id })
     .update(data)
-    .returning(["id", "name", "email", "phone", "role", "image"]);
+    .returning([
+      "id",
+      "name",
+      "email",
+      "phone",
+      "role",
+      "image",
+      "is_active",
+      "is_blocked",
+      "block_reason",
+    ]);
+}
+
+function deleteUser(id) {
+  return db("users").where({ id }).del();
 }
 
 const sendOtp = async ({ email, otp }) => {
@@ -77,6 +100,10 @@ async function listCustomers({ search } = {}) {
       "users.email",
       "users.phone",
       "users.role",
+      "users.is_active",
+      "users.is_blocked",
+      "users.block_reason",
+      "users.blocked_at",
       "users.created_at",
       db.raw("COUNT(orders.id) as orders_count"),
       db.raw("COALESCE(SUM(orders.total_amount), 0) as total_spent")
@@ -97,6 +124,34 @@ async function listCustomers({ search } = {}) {
   return await query;
 }
 
+// Blocked Support Requests
+function createBlockedCustomerRequest(data) {
+  return db("blocked_customer_requests")
+    .insert(data)
+    .returning("*")
+    .then((rows) => rows[0]);
+}
+
+function listBlockedCustomerRequests({ status } = {}) {
+  let query = db("blocked_customer_requests").orderBy("created_at", "desc");
+  if (status) {
+    query = query.where({ status });
+  }
+  return query;
+}
+
+function findBlockedRequestById(id) {
+  return db("blocked_customer_requests").where({ id }).first();
+}
+
+function updateBlockedCustomerRequest(id, data) {
+  return db("blocked_customer_requests")
+    .where({ id })
+    .update(data)
+    .returning("*")
+    .then((rows) => rows[0]);
+}
+
 module.exports = {
   findUserByEmail,
   countAdmins,
@@ -105,6 +160,11 @@ module.exports = {
   sendOtp,
   sendPasswordResetEmail,
   updateUser,
+  deleteUser,
   findUserById,
   listCustomers,
+  createBlockedCustomerRequest,
+  listBlockedCustomerRequests,
+  findBlockedRequestById,
+  updateBlockedCustomerRequest,
 };

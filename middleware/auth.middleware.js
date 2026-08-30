@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const db = require("../config/db");
 
 // Verify access token from cookie or Authorization header
 function verifyToken(req, res, next) {
@@ -18,7 +19,7 @@ function verifyToken(req, res, next) {
   jwt.verify(
     accessToken,
     process.env.ACCESS_TOKEN_SECRET,
-    (err, decoded) => {
+    async (err, decoded) => {
       if (err) {
         return res.status(401).json({
           message: "Access token expired or invalid",
@@ -26,6 +27,39 @@ function verifyToken(req, res, next) {
       }
 
       req.user = decoded;
+
+      // Check if user is blocked or deactivated (except for admins)
+      try {
+        const user = await db("users")
+          .where({ id: decoded.id })
+          .select("id", "role", "is_blocked", "is_active", "block_reason")
+          .first();
+
+        if (
+          user &&
+          (user.is_blocked || user.is_active === false) &&
+          user.role !== "admin"
+        ) {
+          // Allow profile read (/me), logout, and blocked support request
+          const currentPath = req.baseUrl ? `${req.baseUrl}${req.path}` : req.path;
+          const isAllowedPath =
+            currentPath.endsWith("/me") ||
+            currentPath.endsWith("/logout") ||
+            currentPath.includes("blocked-support-request");
+
+          if (!isAllowedPath) {
+            return res.status(403).json({
+              message: "Your account has been blocked by administrator.",
+              is_blocked: true,
+              block_reason:
+                user.block_reason || "Account deactivated by administrator.",
+            });
+          }
+        }
+      } catch (dbErr) {
+        console.error("Token verification DB check error:", dbErr);
+      }
+
       next();
     }
   );

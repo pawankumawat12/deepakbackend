@@ -15,8 +15,17 @@ const {
   resetPassword,
   updateProfile,
   getCustomers,
+  editCustomer,
+  removeCustomer,
+  toggleCustomerStatus,
+  submitBlockedSupportRequest,
+  getBlockedSupportRequests,
+  resolveBlockedSupportRequest,
 } = require("./auth.controller");
-const { verifyToken, isAdmin } = require("../../../middleware/auth.middleware");
+const {
+  verifyToken,
+  isAdmin,
+} = require("../../../middleware/auth.middleware");
 const { countAdmins } = require("../../models/auth.model");
 const { uploadImage } = require("../../../middleware/upload");
 
@@ -45,8 +54,34 @@ router.post("/register", register);
 
 router.post("/verify-otp", verifyOtp);
 router.get("/me", verifyToken, getMe);
-router.put("/profile", verifyToken, uploadImage.single("image"), updateProfile);
+router.put(
+  "/profile",
+  verifyToken,
+  uploadImage.single("image"),
+  updateProfile
+);
+
+// Customer Management (Admin)
 router.get("/customers", verifyToken, isAdmin, getCustomers);
+router.put("/customers/:id", verifyToken, isAdmin, editCustomer);
+router.delete("/customers/:id", verifyToken, isAdmin, removeCustomer);
+router.patch("/customers/:id/status", verifyToken, isAdmin, toggleCustomerStatus);
+
+// Blocked Support Requests
+router.post("/blocked-support-request", submitBlockedSupportRequest);
+router.get(
+  "/blocked-support-requests",
+  verifyToken,
+  isAdmin,
+  getBlockedSupportRequests
+);
+router.patch(
+  "/blocked-support-requests/:id/resolve",
+  verifyToken,
+  isAdmin,
+  resolveBlockedSupportRequest
+);
+
 router.post("/refresh-token", refreshAccessToken);
 router.post("/logout", logout);
 router.post("/register-admin", allowInitialAdmin, registerAdmin);

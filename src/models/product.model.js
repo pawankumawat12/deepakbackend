@@ -24,9 +24,17 @@ function findProductById(id) {
     .select([
       ...PRODUCT_COLUMNS,
       "categories.name as category_name",
+      db.raw(
+        "COALESCE(ROUND(AVG(CASE WHEN reviews.is_hidden = false THEN reviews.rating END)::numeric, 1), 0)::float as rating"
+      ),
+      db.raw(
+        "COUNT(CASE WHEN reviews.is_hidden = false THEN reviews.id END)::int as total_reviews"
+      ),
     ])
     .leftJoin("categories", "products.category_id", "categories.id")
+    .leftJoin("reviews", "products.id", "reviews.product_id")
     .where("products.id", id)
+    .groupBy("products.id", "categories.name")
     .first();
 }
 
@@ -45,8 +53,15 @@ function findProducts({
     .select([
       ...PRODUCT_COLUMNS,
       "categories.name as category_name",
+      db.raw(
+        "COALESCE(ROUND(AVG(CASE WHEN reviews.is_hidden = false THEN reviews.rating END)::numeric, 1), 0)::float as rating"
+      ),
+      db.raw(
+        "COUNT(CASE WHEN reviews.is_hidden = false THEN reviews.id END)::int as total_reviews"
+      ),
     ])
-    .leftJoin("categories", "products.category_id", "categories.id");
+    .leftJoin("categories", "products.category_id", "categories.id")
+    .leftJoin("reviews", "products.id", "reviews.product_id");
 
   if (categoryId !== undefined) {
     query = query.where("products.category_id", categoryId);
@@ -70,6 +85,7 @@ function findProducts({
   }
 
   return query
+    .groupBy("products.id", "categories.name")
     .orderBy(sortBy, sortOrder)
     .limit(limit)
     .offset(offset);

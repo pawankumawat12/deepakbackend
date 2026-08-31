@@ -11,6 +11,7 @@ const orderRoutes = require("./src/modules/order/order.routes");
 const addressRoutes = require("./src/modules/address/address.routes");
 const chatRoutes = require("./src/modules/chat/chat.routes");
 const notificationRoutes = require("./src/modules/notification/notification.routes");
+const reviewRoutes = require("./src/modules/reviews/review.routes");
 const cookieParser = require("cookie-parser");
 
 const app = express();
@@ -74,6 +75,7 @@ app.use("/api/v1/settings", settingsRoutes);
 app.use("/api/v1/addresses", addressRoutes);
 app.use("/api/v1/chat", chatRoutes);
 app.use("/api/v1/notifications", notificationRoutes);
+app.use("/api/v1/reviews", reviewRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

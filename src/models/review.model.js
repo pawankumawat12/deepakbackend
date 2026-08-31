@@ -128,7 +128,13 @@ async function getProductReviews(productId, { page = 1, limit = 10, currentUserI
   const [countRow] = await query.clone().clearSelect().count("reviews.id as count");
   const filteredCount = Number(countRow?.count || 0);
 
-  const reviews = await query.orderBy("reviews.created_at", "desc").limit(l).offset(offset);
+  const totalPages = Math.ceil(filteredCount / l) || 1;
+  const hasMore = p < totalPages;
+
+  const reviews = await query
+    .orderBy("reviews.created_at", "desc")
+    .limit(l)
+    .offset(offset);
 
   return {
     reviews,
@@ -141,7 +147,8 @@ async function getProductReviews(productId, { page = 1, limit = 10, currentUserI
       page: p,
       limit: l,
       total: filteredCount,
-      totalPages: Math.ceil(filteredCount / l) || 1,
+      totalPages,
+      hasMore,
     },
   };
 }

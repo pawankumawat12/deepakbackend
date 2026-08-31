@@ -83,6 +83,7 @@ async function createOrder(req, res) {
       transactionId: null,
       paymentDetailsJson: null,
       notes,
+      offerCode: req.body?.offerCode || req.body?.couponCode || null,
     });
 
     // Create Admin Notification in Database

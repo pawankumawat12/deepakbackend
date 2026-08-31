@@ -40,8 +40,10 @@ async function calculateCartAndOrderPricing({
   deliveryAddress = null,
   paymentMethod = "Cash on Delivery",
   pricingSettings = null,
+  offerCode = null,
 }) {
   const settings = pricingSettings || (await getOrderPricingSettings());
+  const { evaluateCartOffer } = require("../models/offer.model");
 
   // 1. Subtotal
   let rawSubtotal = 0;
@@ -55,13 +57,39 @@ async function calculateCartAndOrderPricing({
   }
   rawSubtotal = Math.round(rawSubtotal * 100) / 100;
 
-  // 2. Discount
-  const discountPercent = Number(settings.discount_percent) || 0;
-  const discount =
-    discountPercent > 0
-      ? Math.round(((rawSubtotal * discountPercent) / 100) * 100) / 100
-      : 0;
-  const discountedSubtotal = Math.max(0, Math.round((rawSubtotal - discount) * 100) / 100);
+  // 2. Dynamic Offer / Promo Code & Discount Calculation
+  const offerEvaluation = await evaluateCartOffer({
+    offerCode,
+    items,
+    rawSubtotal,
+  });
+
+  let discount = 0;
+  let discountPercent = 0;
+  let appliedOffer = null;
+
+  if (offerEvaluation && offerEvaluation.isEligible && offerEvaluation.discount > 0) {
+    discount = Math.round(offerEvaluation.discount * 100) / 100;
+    appliedOffer = {
+      id: offerEvaluation.offer?.id || null,
+      code: offerEvaluation.offer?.code || offerCode,
+      title: offerEvaluation.offer?.title || "Special Offer",
+      badge: offerEvaluation.offer?.badge || "PROMO",
+      type: offerEvaluation.offer?.type || "PERCENTAGE",
+      discount: discount,
+    };
+  } else {
+    // Fallback to store global discount setting if set
+    discountPercent = Number(settings.discount_percent) || 0;
+    if (discountPercent > 0) {
+      discount = Math.round(((rawSubtotal * discountPercent) / 100) * 100) / 100;
+    }
+  }
+
+  const discountedSubtotal = Math.max(
+    0,
+    Math.round((rawSubtotal - discount) * 100) / 100
+  );
 
   // 3. Minimum Order Check
   const minimumOrderAmount = Number(settings.minimum_order_amount) || 0;
@@ -172,10 +200,12 @@ async function calculateCartAndOrderPricing({
     total_items: totalQuantity,
     item_types_count: items.length,
 
-    // Discount
+    // Discount & Applied Offer
     discount_percent: discountPercent,
     discount,
     discounted_subtotal: discountedSubtotal,
+    applied_offer: appliedOffer,
+    offer_evaluation: offerEvaluation,
 
     // Tax
     gst_percent: gstPercent,

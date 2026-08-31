@@ -100,6 +100,7 @@ async function respondWithCart(res, userId, message = "Success", options = {}) {
     items,
     deliveryAddress,
     paymentMethod: options.paymentMethod || "Cash on Delivery",
+    offerCode: options.offerCode || null,
   });
 
   const stockProblemItems = items.filter((it) => it.isOutOfStock || it.exceedsStock);
@@ -111,6 +112,8 @@ async function respondWithCart(res, userId, message = "Success", options = {}) {
     discountPercent: pricing.discount_percent,
     discount: pricing.discount,
     discountedSubtotal: pricing.discounted_subtotal,
+    appliedOffer: pricing.applied_offer,
+    offerEvaluation: pricing.offer_evaluation,
 
     gstPercent: pricing.gst_percent,
     taxInclusive: pricing.tax_inclusive,
@@ -166,9 +169,11 @@ async function getCart(req, res) {
   try {
     const addressId = req.query.addressId ? Number(req.query.addressId) : null;
     const paymentMethod = req.query.paymentMethod || "Cash on Delivery";
+    const offerCode = req.query.offerCode || req.query.code || null;
     return await respondWithCart(res, req.user.id, "Cart fetched successfully", {
       addressId,
       paymentMethod,
+      offerCode,
     });
   } catch (error) {
     console.error("Get cart error:", error);

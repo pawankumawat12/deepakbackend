@@ -19,6 +19,7 @@ async function createOrderWithTransaction({
   transactionId,
   paymentDetailsJson,
   notes,
+  offerCode = null,
 }) {
   return db.transaction(async (trx) => {
     // 1. Fetch current cart items with lock
@@ -33,6 +34,7 @@ async function createOrderWithTransaction({
         "products.availability_type",
         "products.images",
         "products.is_active",
+        "products.category_id",
       ])
       .join("products", "cart_items.product_id", "products.id")
       .where("cart_items.user_id", userId)
@@ -65,11 +67,12 @@ async function createOrderWithTransaction({
       }
     }
 
-    // 3. Recalculate complete pricing atomically with latest settings
+    // 3. Recalculate complete pricing atomically with latest settings & dynamic offer
     const pricing = await calculateCartAndOrderPricing({
       items: rawCartItems,
       deliveryAddress: deliveryAddressJson,
       paymentMethod,
+      offerCode,
     });
 
     if (pricing.is_below_minimum_order) {
@@ -120,6 +123,12 @@ async function createOrderWithTransaction({
         updated_at: trx.fn.now(),
       })
       .returning("*");
+
+    // Increment used_count for applied offer
+    if (pricing.applied_offer?.id) {
+      const { incrementOfferUsage } = require("./offer.model");
+      await incrementOfferUsage(pricing.applied_offer.id, trx);
+    }
 
     // 5. Create Order Items and Decrease Stock for IN_STOCK items
     const orderItemsToInsert = [];
@@ -310,12 +319,18 @@ async function findAllOrders({ page = 1, limit = 20, status, search }) {
 }
 
 async function updateOrderStatus(orderId, status) {
+  const updatePayload = {
+    status,
+    updated_at: db.fn.now(),
+  };
+
+  if (status === "Delivered" || status === "Completed") {
+    updatePayload.payment_status = "Paid";
+  }
+
   const [updated] = await db("orders")
     .where({ id: orderId })
-    .update({
-      status,
-      updated_at: db.fn.now(),
-    })
+    .update(updatePayload)
     .returning("*");
   return updated;
 }

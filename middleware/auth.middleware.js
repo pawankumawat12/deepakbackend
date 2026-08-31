@@ -82,7 +82,33 @@ function isAdmin(req, res, next) {
   next();
 }
 
+// Optional Token: sets req.user if valid token provided, but doesn't block if absent
+function optionalToken(req, res, next) {
+  const authHeader = req.headers.authorization;
+  const bearerToken =
+    authHeader && authHeader.startsWith("Bearer ")
+      ? authHeader.split(" ")[1]
+      : null;
+  const accessToken = req.cookies?.accessToken || bearerToken;
+
+  if (!accessToken) {
+    return next();
+  }
+
+  jwt.verify(
+    accessToken,
+    process.env.ACCESS_TOKEN_SECRET,
+    (err, decoded) => {
+      if (!err && decoded) {
+        req.user = decoded;
+      }
+      next();
+    }
+  );
+}
+
 module.exports = {
   verifyToken,
   isAdmin,
+  optionalToken,
 };

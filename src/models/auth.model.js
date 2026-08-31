@@ -61,32 +61,51 @@ function deleteUser(id) {
 
 const sendOtp = async ({ email, otp }) => {
   try {
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
+    const { sendMail } = require("../services/smtp.service");
+    const result = await sendMail({
       to: email,
-      subject: "Your OTP Verification Code",
+      subject: "Your OTP Verification Code - SFC Cafe",
       text: `Your OTP is ${otp}. This OTP is valid for 5 minutes.`,
-    };
-
-    const result = await transporter.sendMail(mailOptions);
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 12px;">
+          <h2 style="color: #4f7d16; margin-top: 0;">SFC Cafe Verification</h2>
+          <p style="font-size: 14px; color: #555;">Use the following One-Time Password (OTP) to complete your verification:</p>
+          <div style="font-size: 28px; font-weight: bold; letter-spacing: 6px; color: #111; background: #f4f8ec; padding: 12px 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
+            ${otp}
+          </div>
+          <p style="font-size: 12px; color: #888;">This OTP is valid for 5 minutes. If you did not request this code, please ignore this email.</p>
+        </div>
+      `,
+    });
     return result;
   } catch (error) {
-    console.error("Nodemailer OTP error:", error);
+    console.error("Dynamic SMTP OTP error:", error);
     throw error;
   }
 };
 
 const sendPasswordResetEmail = async ({ email, resetUrl }) => {
   try {
-    return await transporter.sendMail({
-      from: process.env.EMAIL_USER,
+    const { sendMail } = require("../services/smtp.service");
+    return await sendMail({
       to: email,
       subject: "Reset your SFC Cafe password",
       text: `We received a request to reset your password. Use this link within 15 minutes: ${resetUrl}\n\nIf you did not request this, you can safely ignore this email.`,
-      html: `<p>We received a request to reset your password.</p><p><a href="${resetUrl}">Reset password</a></p><p>This link expires in 15 minutes. If you did not request this, you can safely ignore this email.</p>`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 12px;">
+          <h2 style="color: #4f7d16; margin-top: 0;">Password Reset Request</h2>
+          <p style="font-size: 14px; color: #555;">We received a request to reset your SFC Cafe password.</p>
+          <p style="margin: 24px 0;">
+            <a href="${resetUrl}" style="background-color: #4f7d16; color: #fff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">
+              Reset Password
+            </a>
+          </p>
+          <p style="font-size: 12px; color: #888;">This link expires in 15 minutes. If you did not request a password reset, you can safely ignore this email.</p>
+        </div>
+      `,
     });
   } catch (error) {
-    console.error("Nodemailer password reset error:", error);
+    console.error("Dynamic SMTP password reset error:", error);
     throw error;
   }
 };

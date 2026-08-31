@@ -7,7 +7,10 @@ const {
   updateLogoSettings,
   getOrderPricingSettings,
   updateOrderPricingSettings,
+  getSmtpSettings,
+  updateSmtpSettings,
 } = require("../../models/settings.model");
+const { testSmtpConnection } = require("../../services/smtp.service");
 
 const ALLOWED_THEMES = ["light", "dark"];
 
@@ -214,6 +217,106 @@ async function updateOrderPricing(req, res) {
   }
 }
 
+async function getSmtp(req, res) {
+  try {
+    const data = await getSmtpSettings({ maskPassword: true });
+    return res.status(200).json({
+      success: true,
+      message: "SMTP settings fetched successfully",
+      data,
+    });
+  } catch (error) {
+    console.error("Get SMTP error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch SMTP settings",
+    });
+  }
+}
+
+async function updateSmtp(req, res) {
+  try {
+    const { host, port, secure, user, password, from_email, from_name, is_enabled } = req.body;
+
+    if (!host || !String(host).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "SMTP host is required (e.g. smtp.gmail.com)",
+      });
+    }
+
+    if (!user || !String(user).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "SMTP username / account email is required",
+      });
+    }
+
+    const updated = await updateSmtpSettings({
+      host,
+      port: Number(port) || 587,
+      secure: Boolean(secure),
+      user,
+      password,
+      from_email,
+      from_name,
+      is_enabled: is_enabled !== false,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "SMTP settings saved and updated successfully!",
+      data: updated,
+    });
+  } catch (error) {
+    console.error("Update SMTP error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error?.message || "Failed to update SMTP settings",
+    });
+  }
+}
+
+async function testSmtp(req, res) {
+  try {
+    const { to, host, port, secure, user, password, from_email, from_name } = req.body;
+    const recipient = to || req.user?.email || "pawan@yopmail.com";
+
+    let customConfig = null;
+    if (host && user) {
+      const currentSaved = await getSmtpSettings({ maskPassword: false });
+      let testPass = password;
+      if (!testPass || testPass === "••••••••") {
+        testPass = currentSaved.password;
+      }
+      customConfig = {
+        host: String(host).trim(),
+        port: Number(port) || 587,
+        secure: Boolean(secure),
+        user: String(user).trim(),
+        pass: testPass,
+        from_email: from_email ? String(from_email).trim() : user,
+        from_name: from_name || "SFC Cafe",
+        is_enabled: true,
+      };
+    }
+
+    const result = await testSmtpConnection({ to: recipient, customConfig });
+
+    return res.status(200).json({
+      success: true,
+      message: result.message || `Test email sent to ${recipient}!`,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Test SMTP error:", error);
+    return res.status(400).json({
+      success: false,
+      message: error?.message || "Failed to connect to SMTP server. Please check your credentials and host settings.",
+    });
+  }
+}
+
 module.exports = {
   getTheme,
   updateTheme,
@@ -223,4 +326,7 @@ module.exports = {
   updateLogo,
   getOrderPricing,
   updateOrderPricing,
+  getSmtp,
+  updateSmtp,
+  testSmtp,
 };

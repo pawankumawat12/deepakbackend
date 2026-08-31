@@ -10,6 +10,9 @@ const {
   updateLogo,
   getOrderPricing,
   updateOrderPricing,
+  getSmtp,
+  updateSmtp,
+  testSmtp,
 } = require("./settings.controller");
 
 const router = express.Router();
@@ -25,5 +28,9 @@ router.put("/logo", verifyToken, isAdmin, uploadImage.single("logo"), updateLogo
 
 router.get("/order-pricing", getOrderPricing);
 router.put("/order-pricing", verifyToken, isAdmin, updateOrderPricing);
+
+router.get("/smtp", verifyToken, isAdmin, getSmtp);
+router.put("/smtp", verifyToken, isAdmin, updateSmtp);
+router.post("/smtp/test", verifyToken, isAdmin, testSmtp);
 
 module.exports = router;

@@ -220,6 +220,51 @@ async function updateOrderPricingSettings(data) {
   return next;
 }
 
+async function getSmtpSettings({ maskPassword = true } = {}) {
+  const { decrypt, getRawSmtpSettingsFromDb } = require("../services/smtp.service");
+  const raw = await getRawSmtpSettingsFromDb();
+  const hasPass = Boolean(raw.pass);
+  return {
+    host: raw.host || "smtp.gmail.com",
+    port: Number(raw.port) || 587,
+    secure: Boolean(raw.secure),
+    user: raw.user || "",
+    password: maskPassword ? (hasPass ? "••••••••" : "") : decrypt(raw.pass),
+    is_password_set: hasPass,
+    from_email: raw.from_email || raw.user || "",
+    from_name: raw.from_name || "SFC Cafe",
+    is_enabled: raw.is_enabled !== false,
+  };
+}
+
+async function updateSmtpSettings(data) {
+  const { encrypt, getRawSmtpSettingsFromDb } = require("../services/smtp.service");
+  const raw = await getRawSmtpSettingsFromDb();
+  let updatedPass = raw.pass;
+
+  // If new password provided and not the masked placeholder
+  if (data.password && data.password !== "••••••••") {
+    updatedPass = encrypt(data.password);
+  }
+
+  const next = {
+    host: data.host != null ? String(data.host).trim() : raw.host,
+    port: data.port != null ? Number(data.port) : raw.port,
+    secure: data.secure != null ? Boolean(data.secure) : raw.secure,
+    user: data.user != null ? String(data.user).trim() : raw.user,
+    pass: updatedPass,
+    from_email:
+      data.from_email != null ? String(data.from_email).trim() : raw.from_email,
+    from_name:
+      data.from_name != null ? String(data.from_name).trim() : raw.from_name,
+    is_enabled:
+      data.is_enabled != null ? Boolean(data.is_enabled) : raw.is_enabled,
+  };
+
+  await setSetting("smtp", next);
+  return getSmtpSettings({ maskPassword: true });
+}
+
 module.exports = {
   DEFAULT_COLOR_THEMES,
   getSetting,
@@ -233,4 +278,6 @@ module.exports = {
   DEFAULT_ORDER_PRICING,
   getOrderPricingSettings,
   updateOrderPricingSettings,
+  getSmtpSettings,
+  updateSmtpSettings,
 };

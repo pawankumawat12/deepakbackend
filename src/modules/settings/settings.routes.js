@@ -10,8 +10,6 @@ const {
   updateLogo,
   getOrderPricing,
   updateOrderPricing,
-  getPaymentQr,
-  updatePaymentQr,
 } = require("./settings.controller");
 
 const router = express.Router();
@@ -27,8 +25,5 @@ router.put("/logo", verifyToken, isAdmin, uploadImage.single("logo"), updateLogo
 
 router.get("/order-pricing", getOrderPricing);
 router.put("/order-pricing", verifyToken, isAdmin, updateOrderPricing);
-
-router.get("/payment-qr", getPaymentQr);
-router.put("/payment-qr", verifyToken, isAdmin, uploadImage.single("qr_image"), updatePaymentQr);
 
 module.exports = router;

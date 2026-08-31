@@ -142,12 +142,8 @@ async function calculateCartAndOrderPricing({
   // 7. Fees (Packaging, Platform, COD)
   const packagingFee = rawSubtotal > 0 ? Number(settings.packaging_fee) || 0 : 0;
   const platformFee = rawSubtotal > 0 ? Number(settings.platform_fee) || 0 : 0;
-
-  const isCod = paymentMethod
-    ? paymentMethod.toLowerCase().includes("cash") ||
-      paymentMethod.toLowerCase().includes("cod")
-    : true;
-  const codFee = rawSubtotal > 0 && isCod ? Number(settings.cod_fee) || 0 : 0;
+  const isCod = true;
+  const codFee = rawSubtotal > 0 ? Number(settings.cod_fee) || 0 : 0;
 
   // 8. Grand Total
   let grandTotal = 0;

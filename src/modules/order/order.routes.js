@@ -8,7 +8,6 @@ const {
   updateStatus,
   markItemProduced,
   cancelUserOrder,
-  confirmPayment,
   updatePaymentStatusController,
   acceptOrderController,
   rejectOrderController,
@@ -22,7 +21,6 @@ router.post("/", createOrder);
 router.get("/", getUserOrders);
 router.get("/:id", getOrderDetails);
 router.post("/:id/cancel", cancelUserOrder);
-router.post("/:id/payment-confirm", confirmPayment);
 
 // Admin order management routes
 router.get("/admin/all", isAdmin, getAdminOrders);

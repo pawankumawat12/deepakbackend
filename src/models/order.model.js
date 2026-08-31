@@ -88,16 +88,6 @@ async function createOrderWithTransaction({
       throw err;
     }
 
-    const isOnline =
-      paymentMethod &&
-      !paymentMethod.toLowerCase().includes("cash") &&
-      !paymentMethod.toLowerCase().includes("cod");
-    const initialPaymentStatus = isOnline
-      ? transactionId
-        ? "Pending Verification"
-        : "Pending"
-      : "Pending";
-
     // 4. Create Order Record with full pricing snapshot
     const orderNumber = generateOrderNumber();
     const [order] = await trx("orders")
@@ -121,10 +111,10 @@ async function createOrderWithTransaction({
         total_amount: pricing.grand_total,
         pricing_details_json: pricing,
         status: "Preparing",
-        payment_method: isOnline ? (paymentMethod || "Online Payment") : "Cash on Delivery",
-        payment_status: paymentStatus || initialPaymentStatus,
-        transaction_id: transactionId || null,
-        payment_details_json: paymentDetailsJson || null,
+        payment_method: "Cash on Delivery",
+        payment_status: "Pending",
+        transaction_id: null,
+        payment_details_json: null,
         notes,
         created_at: trx.fn.now(),
         updated_at: trx.fn.now(),
@@ -379,47 +369,6 @@ async function cancelOrder(orderId, cancelReason) {
   });
 }
 
-async function submitPaymentConfirmation(orderId, userId, { transactionId, paymentApp, paymentDetails }) {
-  const order = await db("orders")
-    .where({ id: orderId })
-    .modify((query) => {
-      if (userId) query.where({ user_id: userId });
-    })
-    .first();
-
-  if (!order) {
-    throw new Error("Order not found or unauthorized");
-  }
-
-  let existingDetails = {};
-  if (order.payment_details_json) {
-    existingDetails =
-      typeof order.payment_details_json === "string"
-        ? JSON.parse(order.payment_details_json)
-        : order.payment_details_json;
-  }
-
-  const updatedDetails = {
-    ...existingDetails,
-    ...paymentDetails,
-    payment_app: paymentApp || existingDetails.payment_app || "UPI App",
-    transaction_id: transactionId || order.transaction_id,
-    confirmed_at: new Date().toISOString(),
-  };
-
-  const [updatedOrder] = await db("orders")
-    .where({ id: orderId })
-    .update({
-      transaction_id: transactionId || order.transaction_id,
-      payment_status: "Pending Verification",
-      payment_details_json: updatedDetails,
-      updated_at: db.fn.now(),
-    })
-    .returning("*");
-
-  return formatOrderRow(updatedOrder);
-}
-
 async function updateOrderPaymentStatus(orderId, paymentStatus) {
   const [updated] = await db("orders")
     .where({ id: orderId })
@@ -431,7 +380,7 @@ async function updateOrderPaymentStatus(orderId, paymentStatus) {
   return formatOrderRow(updated);
 }
 
-async function acceptOrder(orderId, { paymentStatus = null, notes = null } = {}) {
+async function acceptOrder(orderId, { notes = null } = {}) {
   const order = await db("orders").where({ id: orderId }).first();
   if (!order) {
     throw new Error("Order not found");
@@ -442,9 +391,6 @@ async function acceptOrder(orderId, { paymentStatus = null, notes = null } = {})
     updated_at: db.fn.now(),
   };
 
-  if (paymentStatus) {
-    updatePayload.payment_status = paymentStatus;
-  }
   if (notes) {
     updatePayload.notes = notes;
   }
@@ -469,7 +415,6 @@ module.exports = {
   updateOrderStatus,
   updateItemProductionStatus,
   cancelOrder,
-  submitPaymentConfirmation,
   updateOrderPaymentStatus,
   acceptOrder,
   rejectOrder,

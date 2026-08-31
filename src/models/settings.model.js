@@ -220,34 +220,6 @@ async function updateOrderPricingSettings(data) {
   return next;
 }
 
-const DEFAULT_PAYMENT_QR = {
-  qr_code_url: "",
-  upi_id: "sfccafe@upi",
-  merchant_name: "SFC Cafe",
-  account_name: "SFC Cafe Jaipur",
-  is_enabled: true,
-  instructions: "Scan the QR code using any UPI App (GPay, PhonePe, Paytm, BHIM) to complete your payment.",
-};
-
-async function getPaymentQrSettings() {
-  const qr = await getSetting("payment_qr");
-  return { ...DEFAULT_PAYMENT_QR, ...qr };
-}
-
-async function updatePaymentQrSettings(data) {
-  const current = await getPaymentQrSettings();
-  const next = {
-    qr_code_url: data.qr_code_url !== undefined ? data.qr_code_url : current.qr_code_url,
-    upi_id: data.upi_id !== undefined ? String(data.upi_id).trim() : current.upi_id,
-    merchant_name: data.merchant_name !== undefined ? String(data.merchant_name).trim() : current.merchant_name,
-    account_name: data.account_name !== undefined ? String(data.account_name).trim() : current.account_name,
-    is_enabled: data.is_enabled !== undefined ? Boolean(data.is_enabled) : current.is_enabled,
-    instructions: data.instructions !== undefined ? String(data.instructions).trim() : current.instructions,
-  };
-  await setSetting("payment_qr", next);
-  return next;
-}
-
 module.exports = {
   DEFAULT_COLOR_THEMES,
   getSetting,
@@ -261,7 +233,4 @@ module.exports = {
   DEFAULT_ORDER_PRICING,
   getOrderPricingSettings,
   updateOrderPricingSettings,
-  DEFAULT_PAYMENT_QR,
-  getPaymentQrSettings,
-  updatePaymentQrSettings,
 };

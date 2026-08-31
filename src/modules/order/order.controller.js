@@ -6,7 +6,6 @@ const {
   updateOrderStatus,
   updateItemProductionStatus,
   cancelOrder,
-  submitPaymentConfirmation,
   updateOrderPaymentStatus,
   acceptOrder,
   rejectOrder,
@@ -30,10 +29,6 @@ async function createOrder(req, res) {
       customerPhone: inputPhone,
       shippingAddress: inputShippingAddress,
       deliveryAddressJson: inputDeliveryJson,
-      paymentMethod = "Cash on Delivery",
-      paymentStatus,
-      transactionId,
-      paymentDetailsJson,
       notes = "",
     } = req.body || {};
 
@@ -83,54 +78,35 @@ async function createOrder(req, res) {
       customerPhone: finalCustomerPhone,
       shippingAddress: finalShippingAddress,
       deliveryAddressJson: parsedDeliveryJson,
-      paymentMethod,
-      paymentStatus,
-      transactionId,
-      paymentDetailsJson,
+      paymentMethod: "Cash on Delivery",
+      paymentStatus: "Pending",
+      transactionId: null,
+      paymentDetailsJson: null,
       notes,
     });
-
-    const isOnline =
-      paymentMethod.toLowerCase().includes("online") ||
-      paymentMethod.toLowerCase().includes("upi");
 
     // Create Admin Notification in Database
     await notificationModel.createNotification({
       role: "admin",
-      type: isOnline ? "payment_received" : "order_created",
-      title: isOnline
-        ? `New Online Payment Order: #${order.order_number || order.id}`
-        : `New Order: #${order.order_number || order.id}`,
-      message: `${finalCustomerName} placed an order worth ₹${order.total_amount} via ${paymentMethod}.`,
+      type: "order_created",
+      title: `New COD Order: #${order.order_number || order.id}`,
+      message: `${finalCustomerName} placed a Cash on Delivery order worth ₹${order.total_amount}.`,
       orderId: order.id,
       dataJson: {
         orderId: order.id,
         orderNumber: order.order_number || `#SFC-${order.id}`,
         customerName: finalCustomerName,
         totalAmount: order.total_amount,
-        paymentMethod,
+        paymentMethod: "Cash on Delivery",
         paymentStatus: order.payment_status,
-        transactionId: order.transaction_id,
       },
     });
 
     // Real-time Socket.IO emission to admin
     emitToAdmin("admin_new_order", {
       order,
-      isOnline,
       message: `New order #${order.order_number || order.id} from ${finalCustomerName}`,
     });
-
-    if (isOnline && order.transaction_id) {
-      emitToAdmin("admin_payment_received", {
-        orderId: order.id,
-        orderNumber: order.order_number || `#SFC-${order.id}`,
-        customerName: finalCustomerName,
-        amount: order.total_amount,
-        transactionId: order.transaction_id,
-        paymentStatus: order.payment_status,
-      });
-    }
 
     return res.status(201).json({
       success: true,
@@ -270,9 +246,9 @@ async function updateStatus(req, res) {
 async function acceptOrderController(req, res) {
   try {
     const orderId = Number(req.params.id);
-    const { paymentStatus, notes } = req.body || {};
+    const { notes } = req.body || {};
 
-    const updated = await acceptOrder(orderId, { paymentStatus, notes });
+    const updated = await acceptOrder(orderId, { notes });
 
     // Notify customer in real-time
     if (updated && updated.user_id) {
@@ -451,68 +427,12 @@ async function cancelUserOrder(req, res) {
   }
 }
 
-async function confirmPayment(req, res) {
-  try {
-    const orderId = Number(req.params.id);
-    const userId = req.user.id;
-    const { transactionId, paymentDetails } = req.body || {};
-    let paymentApp =
-      req.body?.paymentApp ||
-      paymentDetails?.app ||
-      paymentDetails?.paymentApp ||
-      "UPI App";
-
-    const updatedOrder = await submitPaymentConfirmation(orderId, userId, {
-      transactionId: transactionId ? String(transactionId).trim() : undefined,
-      paymentApp: String(paymentApp).trim(),
-      paymentDetails,
-    });
-
-    // Notify Admin about submitted payment proof
-    await notificationModel.createNotification({
-      role: "admin",
-      type: "payment_received",
-      title: `Payment Proof Submitted: #${updatedOrder.order_number || updatedOrder.id}`,
-      message: `UTR: ${updatedOrder.transaction_id || "N/A"} via ${paymentApp || "UPI"} for ₹${updatedOrder.total_amount}.`,
-      orderId: updatedOrder.id,
-      dataJson: {
-        orderId: updatedOrder.id,
-        transactionId: updatedOrder.transaction_id,
-        paymentApp,
-        totalAmount: updatedOrder.total_amount,
-      },
-    });
-
-    emitToAdmin("admin_payment_received", {
-      orderId: updatedOrder.id,
-      orderNumber: updatedOrder.order_number || `#SFC-${updatedOrder.id}`,
-      customerName: updatedOrder.customer_name,
-      amount: updatedOrder.total_amount,
-      transactionId: updatedOrder.transaction_id,
-      paymentApp,
-      paymentStatus: updatedOrder.payment_status,
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: "Payment confirmation submitted successfully. We are verifying your payment.",
-      data: updatedOrder,
-    });
-  } catch (error) {
-    console.error("Confirm payment error:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message || "Failed to confirm payment",
-    });
-  }
-}
-
 async function updatePaymentStatusController(req, res) {
   try {
     const orderId = Number(req.params.id);
     const { paymentStatus } = req.body;
 
-    const allowed = ["Pending", "Pending Verification", "Paid", "Failed", "Refunded"];
+    const allowed = ["Pending", "Paid", "Failed", "Refunded"];
     if (!paymentStatus || !allowed.includes(paymentStatus)) {
       return res.status(400).json({
         success: false,
@@ -573,7 +493,6 @@ module.exports = {
   updateStatus,
   markItemProduced,
   cancelUserOrder,
-  confirmPayment,
   updatePaymentStatusController,
   acceptOrderController,
   rejectOrderController,

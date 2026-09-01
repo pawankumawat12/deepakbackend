@@ -218,7 +218,6 @@ async function getProductReviews(req, res) {
       limit,
       currentUserId,
     });
-
     return res.status(200).json({
       success: true,
       data: result,

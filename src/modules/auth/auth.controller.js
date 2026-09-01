@@ -282,7 +282,7 @@ const sendOtp = async (req, res) => {
     const user = await findUserByEmail(email);
 
     if (!user) {
-      return res.status(404).json({ message: "Email is not registered" });
+      return res.status(404).json({ message: "Invalid Credentials" });
     }
 
     const resend = await resendVerificationOtp(user, email, updateUser);
@@ -322,7 +322,7 @@ const verifyOtp = async (req, res) => {
 
     if (!user) {
       return res.status(404).json({
-        message: "Email is not registered",
+        message: "Invalid Credentials",
       });
     }
 
@@ -534,7 +534,7 @@ async function login(req, res) {
 
       if (!user) {
         return res.status(400).json({
-          message: "Email is not registered",
+          message: "Invalid Credentials",
         });
       }
     }

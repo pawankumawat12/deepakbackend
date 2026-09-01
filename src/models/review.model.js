@@ -93,6 +93,7 @@ async function getProductReviews(productId, { page = 1, limit = 10, currentUserI
       "users.image as user_image"
     )
     .where("reviews.product_id", pId)
+    .where("reviews.is_hidden", false)
     .where((builder) => {
       builder.where("reviews.is_hidden", false);
       if (currentUserId) {

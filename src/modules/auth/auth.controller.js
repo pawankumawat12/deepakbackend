@@ -672,6 +672,7 @@ const refreshAccessToken = async (req, res) => {
 
     return res.status(200).json({
       message: "Access token refreshed",
+      accessToken: newAccessToken,
       user: {
         id: user.id,
         name: user.name,

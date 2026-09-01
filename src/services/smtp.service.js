@@ -152,13 +152,13 @@ async function testSmtpConnection({ to, customConfig = null }) {
     const testResult = await transporter.sendMail({
       from: fromAddress,
       to,
-      subject: "✅ SFC Cafe - SMTP Test Email Successful!",
+      subject: "SFC Cafe - SMTP Test Email Successful!",
       text: `Hello,\n\nThis is a test email sent from SFC Cafe Admin Dashboard.\n\nSMTP Host: ${config.host}\nSMTP Port: ${config.port}\nEncryption: ${config.secure ? "SSL/TLS (Port 465)" : "STARTTLS (Port 587)"}\nSender: ${config.from_name} <${config.from_email || config.user}>\n\nYour SMTP server is configured and working perfectly!\n\nBest regards,\nSFC Cafe Team`,
       html: `
         <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 16px; background-color: #ffffff;">
           <div style="text-align: center; margin-bottom: 20px;">
             <div style="display: inline-block; padding: 10px 16px; background-color: #dcfce7; color: #166534; font-weight: 800; border-radius: 12px; font-size: 16px;">
-              ✅ SMTP Configuration Active
+              SMTP Configuration Active
             </div>
           </div>
           <h2 style="color: #111827; margin: 0 0 10px 0; text-align: center; font-size: 20px;">SMTP Connection Verified!</h2>

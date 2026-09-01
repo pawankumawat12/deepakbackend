@@ -155,20 +155,32 @@ async function createOffer(data) {
     throw new Error(`An offer with promo code "${code}" already exists.`);
   }
 
+  const offerType = String(data.type || "PERCENTAGE").toUpperCase();
+  const targetProductIds = parseJsonArray(data.target_product_ids);
+  const targetCategoryIds = parseJsonArray(data.target_category_ids);
+  const buyQty = Math.max(1, Number(data.buy_qty) || 1);
+  const getQty = Math.max(1, Number(data.get_qty) || 1);
+
+  if (offerType === "BOGO") {
+    if (!targetProductIds || targetProductIds.length === 0) {
+      throw new Error("Please select a target product to which the BOGO offer applies.");
+    }
+  }
+
   const [row] = await db("offers")
     .insert({
       title: String(data.title || "").trim(),
       code,
       description: data.description || null,
       badge: data.badge || null,
-      type: String(data.type || "PERCENTAGE").toUpperCase(),
+      type: offerType,
       discount_value: Number(data.discount_value) || 0,
       min_order_amount: Number(data.min_order_amount) || 0,
       max_discount_amount: data.max_discount_amount != null ? Number(data.max_discount_amount) : null,
-      target_product_ids: JSON.stringify(parseJsonArray(data.target_product_ids)),
-      target_category_ids: JSON.stringify(parseJsonArray(data.target_category_ids)),
-      buy_qty: Number(data.buy_qty) || 1,
-      get_qty: Number(data.get_qty) || 1,
+      target_product_ids: JSON.stringify(targetProductIds),
+      target_category_ids: JSON.stringify(targetCategoryIds),
+      buy_qty: buyQty,
+      get_qty: getQty,
       banner_image: data.banner_image || null,
       start_date: data.start_date ? new Date(data.start_date) : null,
       end_date: data.end_date ? new Date(data.end_date) : null,
@@ -200,6 +212,17 @@ async function updateOffer(id, data) {
     }
   }
 
+  const effectiveType = data.type != null ? String(data.type).toUpperCase() : current.type;
+  if (effectiveType === "BOGO") {
+    const effectiveTargetProductIds =
+      data.target_product_ids !== undefined
+        ? parseJsonArray(data.target_product_ids)
+        : current.target_product_ids;
+    if (!effectiveTargetProductIds || effectiveTargetProductIds.length === 0) {
+      throw new Error("Please select a target product to which the BOGO offer applies.");
+    }
+  }
+
   const updatePayload = {
     updated_at: db.fn.now(),
   };
@@ -220,8 +243,8 @@ async function updateOffer(id, data) {
   if (data.target_category_ids !== undefined) {
     updatePayload.target_category_ids = JSON.stringify(parseJsonArray(data.target_category_ids));
   }
-  if (data.buy_qty != null) updatePayload.buy_qty = Number(data.buy_qty);
-  if (data.get_qty != null) updatePayload.get_qty = Number(data.get_qty);
+  if (data.buy_qty != null) updatePayload.buy_qty = Math.max(1, Number(data.buy_qty) || 1);
+  if (data.get_qty != null) updatePayload.get_qty = Math.max(1, Number(data.get_qty) || 1);
   if (data.banner_image !== undefined) updatePayload.banner_image = data.banner_image;
   if (data.start_date !== undefined) updatePayload.start_date = data.start_date ? new Date(data.start_date) : null;
   if (data.end_date !== undefined) updatePayload.end_date = data.end_date ? new Date(data.end_date) : null;
@@ -381,32 +404,53 @@ function calculateOfferDiscount(offer, items = [], rawSubtotal = 0) {
       const targetIds = new Set(
         (offer.target_product_ids || []).map((id) => Number(id))
       );
-      const matchingItems =
-        targetIds.size > 0
-          ? items.filter((it) => targetIds.has(Number(it.product_id || it.id)))
-          : items;
 
-      let bogoDiscount = 0;
-      for (const item of matchingItems) {
-        const itemQty = Number(item.quantity) || 0;
-        const itemPrice = Number(item.price) || 0;
-        const freeBatches = Math.floor(itemQty / step);
-        const freeItems = freeBatches * getQty;
-        bogoDiscount += freeItems * itemPrice;
-      }
-
-      if (bogoDiscount <= 0) {
+      if (targetIds.size === 0) {
         return {
           isEligible: false,
           discount: 0,
-          reason: `Add at least ${step} eligible items to receive ${getQty} free under this BOGO deal.`,
+          reason: "This BOGO deal does not have an eligible target product configured.",
         };
       }
 
-      computedDiscount = bogoDiscount;
-      if (offer.max_discount_amount != null && offer.max_discount_amount > 0) {
-        computedDiscount = Math.min(computedDiscount, offer.max_discount_amount);
+      const matchingItems = items.filter((it) =>
+        targetIds.has(Number(it.product_id || it.id))
+      );
+
+      if (matchingItems.length === 0) {
+        return {
+          isEligible: false,
+          discount: 0,
+          reason: `Your cart does not contain the eligible item for this Buy ${buyQty} Get ${getQty} Free offer.`,
+        };
       }
+
+      const totalTargetQty = matchingItems.reduce(
+        (sum, it) => sum + (Number(it.quantity) || 0),
+        0
+      );
+
+      const freeBatches = Math.floor(totalTargetQty / step);
+      const freeItemsCount = freeBatches * getQty;
+
+      if (freeItemsCount <= 0) {
+        const remainingNeeded = step - (totalTargetQty % step);
+        return {
+          isEligible: false,
+          discount: 0,
+          reason: `Add ${remainingNeeded} more of the item to your cart to get ${getQty} FREE with promo code ${offer.code}.`,
+        };
+      }
+
+      // Calculate unit price from the matching product item
+      const unitPrice = Number(matchingItems[0].price) || 0;
+      let bogoDiscount = freeItemsCount * unitPrice;
+
+      if (offer.max_discount_amount != null && offer.max_discount_amount > 0) {
+        bogoDiscount = Math.min(bogoDiscount, offer.max_discount_amount);
+      }
+
+      computedDiscount = bogoDiscount;
       break;
     }
 

@@ -42,6 +42,21 @@ async function createProductReview(req, res) {
       comment: comment.trim(),
     });
 
+    // Notify admins in real-time
+    const notificationModel = require("../../models/notification.model");
+    notificationModel.createNotification({
+      role: "admin",
+      type: "new_review",
+      title: "New Product Review ⭐",
+      message: `${req.user?.name || "A customer"} rated ${product.name} ${numRating} stars: "${comment.trim().slice(0, 80)}"`,
+      dataJson: {
+        reviewId: review.id,
+        productId,
+        productName: product.name,
+        rating: numRating,
+      },
+    }).catch((err) => console.error("Admin review notification error:", err));
+
     return res.status(201).json({
       success: true,
       message: "Review submitted successfully!",
@@ -82,6 +97,19 @@ async function createSiteReview(req, res) {
       title: title || null,
       comment: comment.trim(),
     });
+
+    // Notify admins in real-time
+    const notificationModel = require("../../models/notification.model");
+    notificationModel.createNotification({
+      role: "admin",
+      type: "new_review",
+      title: "New Store Review ⭐",
+      message: `${req.user?.name || "A customer"} rated SFC Cafe ${numRating} stars: "${comment.trim().slice(0, 80)}"`,
+      dataJson: {
+        reviewId: review.id,
+        rating: numRating,
+      },
+    }).catch((err) => console.error("Admin store review notification error:", err));
 
     return res.status(201).json({
       success: true,

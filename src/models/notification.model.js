@@ -1,4 +1,8 @@
 const db = require("../../config/db");
+let socketService = null;
+try {
+  socketService = require("../socket/socket.service");
+} catch {}
 
 /**
  * Insert a new notification
@@ -28,6 +32,25 @@ async function createNotification({
       is_read: false,
     })
     .returning("*");
+
+  // Emit live Socket.IO notification
+  if (socketService) {
+    try {
+      if (role === "admin") {
+        socketService.emitToAdmin("notification:new", created);
+        getUnreadNotificationCount({ role: "admin" }).then((count) => {
+          socketService.emitToAdmin("notification:unread_count", { unreadCount: count });
+        });
+      } else if (userId) {
+        socketService.emitToUser(userId, "notification:new", created);
+        getUnreadNotificationCount({ userId, role: "customer" }).then((count) => {
+          socketService.emitToUser(userId, "notification:unread_count", { unreadCount: count });
+        });
+      }
+    } catch (err) {
+      console.error("[Notification] Socket emission error:", err);
+    }
+  }
 
   return created;
 }
@@ -90,12 +113,27 @@ async function getUnreadNotificationCount({ userId = null, role = "customer" }) 
  * Mark a single notification as read
  */
 async function markNotificationAsRead(id) {
+  const existing = await db("notifications").where({ id: Number(id) }).first();
   const [updated] = await db("notifications")
     .where({ id: Number(id) })
     .update({ is_read: true, updated_at: db.fn.now() })
     .returning("*");
 
-  return updated;
+  if (socketService && existing) {
+    try {
+      if (existing.role === "admin") {
+        getUnreadNotificationCount({ role: "admin" }).then((count) => {
+          socketService.emitToAdmin("notification:unread_count", { unreadCount: count });
+        });
+      } else if (existing.user_id) {
+        getUnreadNotificationCount({ userId: existing.user_id, role: "customer" }).then((count) => {
+          socketService.emitToUser(existing.user_id, "notification:unread_count", { unreadCount: count });
+        });
+      }
+    } catch {}
+  }
+
+  return updated || existing;
 }
 
 /**
@@ -111,6 +149,17 @@ async function markAllNotificationsAsRead({ userId = null, role = "customer" }) 
   }
 
   const updated = await query.update({ is_read: true, updated_at: db.fn.now() });
+
+  if (socketService) {
+    try {
+      if (role === "admin") {
+        socketService.emitToAdmin("notification:unread_count", { unreadCount: 0 });
+      } else if (userId) {
+        socketService.emitToUser(userId, "notification:unread_count", { unreadCount: 0 });
+      }
+    } catch {}
+  }
+
   return updated;
 }
 

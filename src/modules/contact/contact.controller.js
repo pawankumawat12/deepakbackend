@@ -30,6 +30,20 @@ async function submitContactQuery(req, res) {
       message: message.trim(),
     });
 
+    // Notify admins in real-time
+    const notificationModel = require("../../models/notification.model");
+    notificationModel.createNotification({
+      role: "admin",
+      type: "contact_inquiry",
+      title: "New Customer Inquiry 📩",
+      message: `${name.trim()} sent a message: "${subject.trim()}"`,
+      dataJson: {
+        queryId: newQuery.id,
+        email: email.trim().toLowerCase(),
+        phone: phone ? phone.trim() : null,
+      },
+    }).catch((err) => console.error("Admin contact notification error:", err));
+
     return res.status(201).json({
       success: true,
       message: "Thank you for reaching out! Your message has been sent successfully. We'll get back to you soon.",

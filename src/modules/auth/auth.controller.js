@@ -1438,6 +1438,20 @@ async function resolveBlockedSupportRequest(req, res) {
       });
     }
 
+    // Notify customer
+    if (request.user_id) {
+      await notificationModel.createNotification({
+        userId: request.user_id,
+        role: "customer",
+        type: "support_resolution",
+        title: status === "approved" ? "Account Unblocked! 🎉" : "Unblock Request Update",
+        message: status === "approved"
+          ? "Your account has been unblocked by the admin. You can now place orders."
+          : `Your unblock request was reviewed: "${resolved.admin_response}"`,
+        dataJson: resolved,
+      }).catch((err) => console.error("Customer unblock notification error:", err));
+    }
+
     emitToAdmin("blocked_request_resolved", resolved);
 
     return res.status(200).json({

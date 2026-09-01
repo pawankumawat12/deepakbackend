@@ -126,11 +126,13 @@ async function createOrder(req, res) {
 
 async function getUserOrders(req, res) {
   try {
-    const orders = await findOrdersByUser(req.user.id);
+    const { page, limit, status } = req.query || {};
+    const result = await findOrdersByUser(req.user.id, { page, limit, status });
     return res.status(200).json({
       success: true,
       message: "Orders fetched successfully",
-      data: orders,
+      data: result.orders,
+      pagination: result.pagination,
     });
   } catch (error) {
     console.error("Get user orders error:", error);

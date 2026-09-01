@@ -12,14 +12,26 @@ function parsePositiveInteger(value) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-async function respondWithWishlist(res, userId, message, extra = {}) {
-  const items = await getWishlistItems(userId);
-  return res.status(200).json({ message, data: items, ...extra });
+async function respondWithWishlist(res, userId, message, extra = {}, paginationParams = {}) {
+  const result = await getWishlistItems(userId, paginationParams);
+  return res.status(200).json({
+    message,
+    data: result.items,
+    pagination: result.pagination,
+    ...extra,
+  });
 }
 
 async function getWishlist(req, res) {
   try {
-    return respondWithWishlist(res, req.user.id, "Wishlist fetched successfully");
+    const { page, limit } = req.query || {};
+    return respondWithWishlist(
+      res,
+      req.user.id,
+      "Wishlist fetched successfully",
+      {},
+      { page, limit }
+    );
   } catch (error) {
     console.error("Get wishlist error:", error);
     return res.status(500).json({ message: "Server error" });

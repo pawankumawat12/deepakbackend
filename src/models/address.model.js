@@ -3,20 +3,33 @@ const knex = require("../../config/db");
 const TABLE = "addresses";
 
 const createAddress = async (addressData) => {
-  // Ensure latitude and longitude are present to satisfy NOT NULL DB constraints
+  // Ensure latitude and longitude are present to satisfy DB constraints
   if (addressData.latitude == null) addressData.latitude = 0;
   if (addressData.longitude == null) addressData.longitude = 0;
-  if (addressData.is_default) {
+
+  // Check if this is user's first address
+  const existingCount = await knex(TABLE)
+    .where({ user_id: addressData.user_id })
+    .count("id as count")
+    .first();
+
+  const isFirstAddress = !existingCount || Number(existingCount.count) === 0;
+
+  if (isFirstAddress || addressData.is_default) {
+    addressData.is_default = true;
     await knex(TABLE)
       .where({ user_id: addressData.user_id })
       .update({ is_default: false });
+  } else {
+    addressData.is_default = Boolean(addressData.is_default);
   }
 
   const [id] = await knex(TABLE)
     .insert(addressData)
     .returning("id");
 
-  return getAddressById(id.id || id);
+  const addressId = typeof id === "object" && id !== null ? (id.id || id) : id;
+  return getAddressById(addressId, addressData.user_id);
 };
 
 const getAddressById = async (id, userId = null) => {
@@ -32,11 +45,18 @@ const getAddressById = async (id, userId = null) => {
 const getAddressesByUserId = async (userId) => {
   return knex(TABLE)
     .where({ user_id: userId })
+    .orderBy("is_default", "desc")
     .orderBy("created_at", "desc");
 };
 
 const updateAddress = async (id, userId, updateData) => {
-  if (updateData.is_default) {
+  // Clean up data
+  const data = { ...updateData };
+  delete data.id;
+  delete data.user_id;
+  delete data.created_at;
+
+  if (data.is_default) {
     await knex(TABLE)
       .where({ user_id: userId })
       .update({ is_default: false });
@@ -45,7 +65,7 @@ const updateAddress = async (id, userId, updateData) => {
   await knex(TABLE)
     .where({ id, user_id: userId })
     .update({
-      ...updateData,
+      ...data,
       updated_at: knex.fn.now(),
     });
 
@@ -53,9 +73,29 @@ const updateAddress = async (id, userId, updateData) => {
 };
 
 const deleteAddress = async (id, userId) => {
-  return knex(TABLE)
+  const addressToDelete = await knex(TABLE)
+    .where({ id, user_id: userId })
+    .first();
+
+  const count = await knex(TABLE)
     .where({ id, user_id: userId })
     .del();
+
+  // If deleted address was default, promote the newest remaining address as default
+  if (addressToDelete?.is_default) {
+    const nextDefault = await knex(TABLE)
+      .where({ user_id: userId })
+      .orderBy("created_at", "desc")
+      .first();
+
+    if (nextDefault) {
+      await knex(TABLE)
+        .where({ id: nextDefault.id, user_id: userId })
+        .update({ is_default: true, updated_at: knex.fn.now() });
+    }
+  }
+
+  return count;
 };
 
 const setDefaultAddress = async (id, userId) => {
@@ -63,9 +103,11 @@ const setDefaultAddress = async (id, userId) => {
     .where({ user_id: userId })
     .update({ is_default: false });
 
-  return knex(TABLE)
+  await knex(TABLE)
     .where({ id, user_id: userId })
-    .update({ is_default: true });
+    .update({ is_default: true, updated_at: knex.fn.now() });
+
+  return getAddressById(id, userId);
 };
 
 module.exports = {

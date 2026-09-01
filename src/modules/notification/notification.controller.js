@@ -4,14 +4,14 @@ async function listNotifications(req, res) {
   try {
     const user = req.user;
     const role = user.role === "admin" ? "admin" : "customer";
-    const limit = parseInt(req.query.limit, 10) || 50;
-    const offset = parseInt(req.query.offset, 10) || 0;
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 20;
 
-    const notifications = await notificationModel.getNotifications({
+    const result = await notificationModel.getNotifications({
       userId: user.id,
       role,
+      page,
       limit,
-      offset,
     });
 
     const unreadCount = await notificationModel.getUnreadNotificationCount({
@@ -22,9 +22,10 @@ async function listNotifications(req, res) {
     return res.status(200).json({
       success: true,
       data: {
-        notifications,
+        notifications: result.notifications,
         unreadCount,
       },
+      pagination: result.pagination,
     });
   } catch (error) {
     console.error("Error listing notifications:", error);

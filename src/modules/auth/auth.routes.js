@@ -14,6 +14,10 @@ const {
   verifyPasswordResetToken,
   resetPassword,
   updateProfile,
+  requestEmailChange,
+  resendEmailChangeOtp,
+  verifyEmailChange,
+  cancelEmailChange,
   getCustomers,
   editCustomer,
   removeCustomer,
@@ -60,6 +64,12 @@ router.put(
   uploadImage.single("image"),
   updateProfile
 );
+
+// Email Change with OTP
+router.post("/request-email-change", verifyToken, requestEmailChange);
+router.post("/resend-email-change-otp", verifyToken, resendEmailChangeOtp);
+router.post("/verify-email-change", verifyToken, verifyEmailChange);
+router.post("/cancel-email-change", verifyToken, cancelEmailChange);
 
 // Customer Management (Admin)
 router.get("/customers", verifyToken, isAdmin, getCustomers);

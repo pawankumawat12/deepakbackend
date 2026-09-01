@@ -35,7 +35,7 @@ async function createNotification({
 /**
  * Retrieve notifications for a user or for admins
  */
-async function getNotifications({ userId = null, role = "customer", limit = 50, offset = 0 }) {
+async function getNotifications({ userId = null, role = "customer", page = 1, limit = 20, offset = null }) {
   let query = db("notifications");
 
   if (role === "admin") {
@@ -43,15 +43,29 @@ async function getNotifications({ userId = null, role = "customer", limit = 50, 
   } else if (userId) {
     query = query.where({ user_id: Number(userId), role: "customer" });
   } else {
-    return [];
+    return { notifications: [], pagination: { total: 0, page: 1, limit, totalPages: 1 } };
   }
 
-  const rows = await query
-    .orderBy("created_at", "desc")
-    .limit(limit)
-    .offset(offset);
+  const p = Math.max(1, Number(page) || 1);
+  const l = Math.max(1, Math.min(100, Number(limit) || 20));
+  const off = offset !== null ? Number(offset) : (p - 1) * l;
 
-  return rows;
+  const [notifications, countRow] = await Promise.all([
+    query.clone().orderBy("created_at", "desc").limit(l).offset(off),
+    query.clone().count("id as count").first(),
+  ]);
+
+  const total = Number(countRow?.count || 0);
+
+  return {
+    notifications,
+    pagination: {
+      total,
+      page: p,
+      limit: l,
+      totalPages: Math.ceil(total / l) || 1,
+    },
+  };
 }
 
 /**

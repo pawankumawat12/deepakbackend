@@ -15,6 +15,7 @@ const {
   countAdmins,
   createUser,
   sendOtp: sendOtpEmail,
+  sendEmailChangeOtp,
   sendPasswordResetEmail,
   updateUser,
   deleteUser,
@@ -727,6 +728,342 @@ const logout = (req, res) => {
   return res.status(200).json({ message: "Logged out successfully" });
 };
 
+const requestEmailChange = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const { newEmail } = req.body || {};
+    if (!newEmail || typeof newEmail !== "string" || !newEmail.trim()) {
+      return res.status(400).json({ message: "A valid email address is required" });
+    }
+
+    const normalizedEmail = newEmail.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(normalizedEmail)) {
+      return res.status(400).json({ message: "Please provide a valid email format" });
+    }
+
+    const user = await findUserById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.email && user.email.toLowerCase() === normalizedEmail) {
+      return res.status(400).json({
+        message: "This is already your current registered email address",
+      });
+    }
+
+    // Prevent duplicate emails
+    const existingUser = await db("users")
+      .where({ email: normalizedEmail })
+      .whereNot({ id: userId })
+      .first();
+
+    if (existingUser) {
+      return res.status(400).json({
+        message: "This email address is already associated with another account.",
+      });
+    }
+
+    const now = new Date();
+
+    // Check resend lock
+    if (
+      user.pending_email_resend_locked_until &&
+      new Date(user.pending_email_resend_locked_until) > now
+    ) {
+      const retryAfter = secondsRemaining(user.pending_email_resend_locked_until);
+      return res.status(429).json({
+        message: `Too many verification requests. Please try again in ${retryAfter} seconds.`,
+        retryAfter,
+      });
+    }
+
+    // Check 30-second cooldown
+    if (
+      user.pending_email_sent_at &&
+      user.pending_email === normalizedEmail &&
+      now.getTime() - new Date(user.pending_email_sent_at).getTime() < OTP_RESEND_COOLDOWN_MS
+    ) {
+      const retryAfter = Math.ceil(
+        (OTP_RESEND_COOLDOWN_MS -
+          (now.getTime() - new Date(user.pending_email_sent_at).getTime())) /
+          1000
+      );
+      return res.status(429).json({
+        message: `Please wait ${retryAfter} seconds before requesting a new code.`,
+        retryAfter,
+      });
+    }
+
+    let resendCount = Number(user.pending_email_resend_count || 0);
+    let lockedUntil = null;
+
+    if (user.pending_email === normalizedEmail) {
+      resendCount += 1;
+      if (resendCount >= OTP_RESEND_LIMIT) {
+        lockedUntil = new Date(now.getTime() + OTP_RESEND_LOCK_MS);
+      }
+    } else {
+      resendCount = 1;
+    }
+
+    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+    const expireAt = new Date(now.getTime() + 10 * 60 * 1000); // 10 minutes
+
+    await db("users")
+      .where({ id: userId })
+      .update({
+        pending_email: normalizedEmail,
+        pending_email_otp: otp,
+        pending_email_expire_at: expireAt,
+        pending_email_sent_at: now,
+        pending_email_resend_count: resendCount,
+        pending_email_resend_locked_until: lockedUntil,
+      });
+
+    await sendEmailChangeOtp({ email: normalizedEmail, otp });
+
+    return res.status(200).json({
+      success: true,
+      message: `Verification code sent to ${normalizedEmail}`,
+      pendingEmail: normalizedEmail,
+      retryAfter: OTP_RESEND_COOLDOWN_MS / 1000,
+    });
+  } catch (error) {
+    console.error("Request email change error:", error);
+    return res.status(500).json({
+      message: "Failed to send verification code. Please check email configuration.",
+    });
+  }
+};
+
+const resendEmailChangeOtp = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const user = await findUserById(userId);
+    if (!user || !user.pending_email) {
+      return res.status(400).json({
+        message: "No pending email change request found. Please enter your new email again.",
+      });
+    }
+
+    const pendingEmail = user.pending_email;
+    const now = new Date();
+
+    if (
+      user.pending_email_resend_locked_until &&
+      new Date(user.pending_email_resend_locked_until) > now
+    ) {
+      const retryAfter = secondsRemaining(user.pending_email_resend_locked_until);
+      return res.status(429).json({
+        message: `Too many requests. Please try again in ${retryAfter} seconds.`,
+        retryAfter,
+      });
+    }
+
+    if (
+      user.pending_email_sent_at &&
+      now.getTime() - new Date(user.pending_email_sent_at).getTime() < OTP_RESEND_COOLDOWN_MS
+    ) {
+      const retryAfter = Math.ceil(
+        (OTP_RESEND_COOLDOWN_MS -
+          (now.getTime() - new Date(user.pending_email_sent_at).getTime())) /
+          1000
+      );
+      return res.status(429).json({
+        message: `Please wait ${retryAfter} seconds before requesting a new code.`,
+        retryAfter,
+      });
+    }
+
+    let resendCount = Number(user.pending_email_resend_count || 0) + 1;
+    let lockedUntil = null;
+    if (resendCount >= OTP_RESEND_LIMIT) {
+      lockedUntil = new Date(now.getTime() + OTP_RESEND_LOCK_MS);
+    }
+
+    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+    const expireAt = new Date(now.getTime() + 10 * 60 * 1000);
+
+    await db("users")
+      .where({ id: userId })
+      .update({
+        pending_email_otp: otp,
+        pending_email_expire_at: expireAt,
+        pending_email_sent_at: now,
+        pending_email_resend_count: resendCount,
+        pending_email_resend_locked_until: lockedUntil,
+      });
+
+    await sendEmailChangeOtp({ email: pendingEmail, otp });
+
+    return res.status(200).json({
+      success: true,
+      message: `New verification code resent to ${pendingEmail}`,
+      pendingEmail,
+      retryAfter: OTP_RESEND_COOLDOWN_MS / 1000,
+    });
+  } catch (error) {
+    console.error("Resend email change error:", error);
+    return res.status(500).json({ message: "Failed to resend verification code" });
+  }
+};
+
+const verifyEmailChange = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const { otp, newEmail } = req.body || {};
+    if (!otp || !String(otp).trim()) {
+      return res.status(400).json({ message: "Verification code (OTP) is required" });
+    }
+
+    const user = await findUserById(userId);
+    if (!user || !user.pending_email) {
+      return res.status(400).json({
+        message: "No pending email change request found. Please request a new verification code.",
+      });
+    }
+
+    if (newEmail && user.pending_email.toLowerCase() !== newEmail.trim().toLowerCase()) {
+      return res.status(400).json({
+        message: "Email mismatch. Please request a new verification code for this email.",
+      });
+    }
+
+    if (
+      !user.pending_email_expire_at ||
+      new Date() > new Date(user.pending_email_expire_at)
+    ) {
+      return res.status(400).json({
+        message: "Verification code has expired. Please click resend to receive a new code.",
+      });
+    }
+
+    if (String(user.pending_email_otp).trim() !== String(otp).trim()) {
+      return res.status(400).json({
+        message: "Invalid verification code. Please check and try again.",
+      });
+    }
+
+    // Double check email uniqueness before final update
+    const existingUser = await db("users")
+      .where({ email: user.pending_email })
+      .whereNot({ id: userId })
+      .first();
+
+    if (existingUser) {
+      return res.status(400).json({
+        message: "This email address was recently registered with another account.",
+      });
+    }
+
+    const newVerifiedEmail = user.pending_email;
+
+    const updatedUsers = await db("users")
+      .where({ id: userId })
+      .update({
+        email: newVerifiedEmail,
+        is_email_verified: true,
+        pending_email: null,
+        pending_email_otp: null,
+        pending_email_expire_at: null,
+        pending_email_sent_at: null,
+        pending_email_resend_count: 0,
+        pending_email_resend_locked_until: null,
+        updated_at: new Date(),
+      })
+      .returning([
+        "id",
+        "name",
+        "email",
+        "phone",
+        "role",
+        "image",
+      ]);
+
+    const updatedUser = Array.isArray(updatedUsers) ? updatedUsers[0] : updatedUsers;
+
+    const accessToken = generateAccessToken(updatedUser);
+    const refreshToken = generateRefreshToken(updatedUser);
+
+    const isProduction = process.env.NODE_ENV === "production";
+    const cookieOptions = {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: "strict",
+    };
+
+    res.cookie("accessToken", accessToken, {
+      ...cookieOptions,
+      maxAge: 15 * 60 * 1000,
+    });
+
+    res.cookie("refreshToken", refreshToken, {
+      ...cookieOptions,
+      maxAge: 30 * 24 * 60 * 1000,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Email address changed and verified successfully! 🎉",
+      token: accessToken,
+      accessToken,
+      user: {
+        id: updatedUser.id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        phone: updatedUser.phone,
+        role: updatedUser.role,
+        image: updatedUser.image,
+      },
+    });
+  } catch (error) {
+    console.error("Verify email change error:", error);
+    return res.status(500).json({ message: "Failed to verify email change" });
+  }
+};
+
+const cancelEmailChange = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    await db("users")
+      .where({ id: userId })
+      .update({
+        pending_email: null,
+        pending_email_otp: null,
+        pending_email_expire_at: null,
+        pending_email_sent_at: null,
+        pending_email_resend_count: 0,
+        pending_email_resend_locked_until: null,
+      });
+
+    return res.status(200).json({
+      success: true,
+      message: "Email change request cancelled",
+    });
+  } catch (error) {
+    console.error("Cancel email change error:", error);
+    return res.status(500).json({ message: "Failed to cancel email change request" });
+  }
+};
+
 const updateProfile = async (req, res) => {
   try {
     const userId = req.user?.id;
@@ -750,34 +1087,39 @@ const updateProfile = async (req, res) => {
     const trimmedEmail = email ? email.trim().toLowerCase() : null;
     const trimmedPhone = phone ? phone.trim() : null;
 
-    // Check if email is already taken by another user
-    if (trimmedEmail && trimmedEmail !== currentUser.email) {
-      const existingUser = await db("users")
-        .where({ email: trimmedEmail })
-        .whereNot({ id: userId })
-        .first();
-      if (existingUser) {
-        return res.status(400).json({ message: "Email already registered" });
-      }
-    }
-
     // Check if phone is already taken by another user
     if (trimmedPhone && trimmedPhone !== currentUser.phone) {
-      const existingUser = await db("users")
+      const existingPhoneUser = await db("users")
         .where({ phone: trimmedPhone })
         .whereNot({ id: userId })
         .first();
-      if (existingUser) {
+      if (existingPhoneUser) {
         return res
           .status(400)
-          .json({ message: "Phone number already registered" });
+          .json({ message: "Phone number already registered with another account" });
+      }
+    }
+
+    const isEmailChanging = trimmedEmail && trimmedEmail !== (currentUser.email || "").toLowerCase();
+
+    // Check if new email is already registered by another account
+    if (isEmailChanging) {
+      const existingEmailUser = await db("users")
+        .where({ email: trimmedEmail })
+        .whereNot({ id: userId })
+        .first();
+      if (existingEmailUser) {
+        return res.status(400).json({
+          message: "This email address is already associated with another account.",
+        });
       }
     }
 
     const updateData = {
       name: trimmedName,
-      email: trimmedEmail,
       phone: trimmedPhone,
+      // Note: we KEEP current email until verified via OTP if email was changed!
+      email: isEmailChanging ? currentUser.email : trimmedEmail,
       updated_at: new Date(),
     };
 
@@ -790,7 +1132,43 @@ const updateProfile = async (req, res) => {
       ? updatedUsers[0]
       : updatedUsers;
 
+    // If customer entered a new email, trigger the OTP verification process automatically
+    if (isEmailChanging) {
+      const now = new Date();
+      const otp = Math.floor(1000 + Math.random() * 9000).toString();
+      const expireAt = new Date(now.getTime() + 10 * 60 * 1000);
+
+      await db("users")
+        .where({ id: userId })
+        .update({
+          pending_email: trimmedEmail,
+          pending_email_otp: otp,
+          pending_email_expire_at: expireAt,
+          pending_email_sent_at: now,
+          pending_email_resend_count: 1,
+          pending_email_resend_locked_until: null,
+        });
+
+      await sendEmailChangeOtp({ email: trimmedEmail, otp });
+
+      return res.status(200).json({
+        success: true,
+        message: `Profile updated. A 4-digit verification code was sent to ${trimmedEmail} to complete your email change.`,
+        requiresEmailOtp: true,
+        pendingEmail: trimmedEmail,
+        user: {
+          id: updatedUser.id,
+          name: updatedUser.name,
+          email: currentUser.email, // stays current until verified
+          phone: updatedUser.phone,
+          role: updatedUser.role,
+          image: updatedUser.image,
+        },
+      });
+    }
+
     return res.status(200).json({
+      success: true,
       message: "Profile updated successfully",
       user: {
         id: updatedUser.id,
@@ -809,12 +1187,13 @@ const updateProfile = async (req, res) => {
 
 const getCustomers = async (req, res) => {
   try {
-    const { search } = req.query;
-    const customers = await listCustomers({ search });
+    const { page, limit, search, status } = req.query;
+    const result = await listCustomers({ page, limit, search, status });
     return res.status(200).json({
       success: true,
       message: "Customers fetched successfully",
-      data: customers,
+      data: result.customers,
+      pagination: result.pagination,
     });
   } catch (error) {
     console.error("Get customers error:", error);
@@ -998,9 +1377,14 @@ async function submitBlockedSupportRequest(req, res) {
 
 async function getBlockedSupportRequests(req, res) {
   try {
-    const { status } = req.query;
-    const list = await listBlockedCustomerRequests({ status });
-    return res.status(200).json({ success: true, data: list });
+    const { page, limit, status } = req.query || {};
+    const result = await listBlockedCustomerRequests({ page, limit, status });
+    return res.status(200).json({
+      success: true,
+      message: "Support requests fetched successfully",
+      data: result.requests,
+      pagination: result.pagination,
+    });
   } catch (error) {
     console.error("Get blocked requests error:", error);
     return res
@@ -1086,6 +1470,10 @@ module.exports = {
   getMe,
   logout,
   updateProfile,
+  requestEmailChange,
+  resendEmailChangeOtp,
+  verifyEmailChange,
+  cancelEmailChange,
   getCustomers,
   editCustomer,
   removeCustomer,

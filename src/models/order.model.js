@@ -216,66 +216,19 @@ function formatOrderRow(order) {
   };
 }
 
-async function findOrdersByUser(userId) {
-  const orders = await db("orders")
-    .where({ user_id: userId })
-    .orderBy("created_at", "desc");
+async function findOrdersByUser(userId, { page = 1, limit = 10, status = null } = {}) {
+  const p = Math.max(1, Number(page) || 1);
+  const l = Math.max(1, Math.min(100, Number(limit) || 10));
+  const offset = (p - 1) * l;
 
-  if (!orders.length) return [];
+  let query = db("orders").where({ user_id: userId });
 
-  const orderIds = orders.map((o) => o.id);
-  const items = await db("order_items")
-    .whereIn("order_id", orderIds)
-    .orderBy("id", "asc");
-
-  const itemsByOrder = {};
-  items.forEach((item) => {
-    if (!itemsByOrder[item.order_id]) itemsByOrder[item.order_id] = [];
-    itemsByOrder[item.order_id].push(item);
-  });
-
-  return orders.map((o) => ({
-    ...formatOrderRow(o),
-    items: itemsByOrder[o.id] || [],
-  }));
-}
-
-async function findOrderById(orderId, userId = null) {
-  let query = db("orders").where({ id: orderId });
-  if (userId) {
-    query = query.where({ user_id: userId });
-  }
-  const order = await query.first();
-  if (!order) return null;
-
-  const items = await db("order_items")
-    .where({ order_id: order.id })
-    .orderBy("id", "asc");
-
-  return {
-    ...formatOrderRow(order),
-    items,
-  };
-}
-
-async function findAllOrders({ page = 1, limit = 20, status, search }) {
-  const offset = (page - 1) * limit;
-  let query = db("orders");
-
-  if (status) {
+  if (status && String(status).trim() && String(status).toLowerCase() !== "all") {
     query = query.where({ status });
   }
 
-  if (search) {
-    query = query.where(function () {
-      this.whereILike("order_number", `%${search}%`)
-        .orWhereILike("customer_name", `%${search}%`)
-        .orWhereILike("customer_email", `%${search}%`);
-    });
-  }
-
   const [orders, countRow] = await Promise.all([
-    query.clone().orderBy("created_at", "desc").limit(limit).offset(offset),
+    query.clone().orderBy("created_at", "desc").limit(l).offset(offset),
     query.clone().count("id as count").first(),
   ]);
 
@@ -286,9 +239,9 @@ async function findAllOrders({ page = 1, limit = 20, status, search }) {
       orders: [],
       pagination: {
         total,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(total / limit) || 1,
+        page: p,
+        limit: l,
+        totalPages: Math.ceil(total / l) || 1,
       },
     };
   }
@@ -311,9 +264,91 @@ async function findAllOrders({ page = 1, limit = 20, status, search }) {
     })),
     pagination: {
       total,
-      page: Number(page),
-      limit: Number(limit),
-      totalPages: Math.ceil(total / limit) || 1,
+      page: p,
+      limit: l,
+      totalPages: Math.ceil(total / l) || 1,
+    },
+  };
+}
+
+async function findOrderById(orderId, userId = null) {
+  let query = db("orders").where({ id: orderId });
+  if (userId) {
+    query = query.where({ user_id: userId });
+  }
+  const order = await query.first();
+  if (!order) return null;
+
+  const items = await db("order_items")
+    .where({ order_id: order.id })
+    .orderBy("id", "asc");
+
+  return {
+    ...formatOrderRow(order),
+    items,
+  };
+}
+
+async function findAllOrders({ page = 1, limit = 20, status, search }) {
+  const p = Math.max(1, Number(page) || 1);
+  const l = Math.max(1, Math.min(100, Number(limit) || 20));
+  const offset = (p - 1) * l;
+  let query = db("orders");
+
+  if (status && status !== "all" && status !== "") {
+    query = query.where({ status });
+  }
+
+  if (search && String(search).trim()) {
+    const s = `%${String(search).trim()}%`;
+    query = query.where(function () {
+      this.whereILike("order_number", s)
+        .orWhereILike("customer_name", s)
+        .orWhereILike("customer_email", s)
+        .orWhereILike("customer_phone", s);
+    });
+  }
+
+  const [orders, countRow] = await Promise.all([
+    query.clone().orderBy("created_at", "desc").limit(l).offset(offset),
+    query.clone().count("id as count").first(),
+  ]);
+
+  const total = Number(countRow?.count || 0);
+
+  if (!orders.length) {
+    return {
+      orders: [],
+      pagination: {
+        total,
+        page: p,
+        limit: l,
+        totalPages: Math.ceil(total / l) || 1,
+      },
+    };
+  }
+
+  const orderIds = orders.map((o) => o.id);
+  const items = await db("order_items")
+    .whereIn("order_id", orderIds)
+    .orderBy("id", "asc");
+
+  const itemsByOrder = {};
+  items.forEach((item) => {
+    if (!itemsByOrder[item.order_id]) itemsByOrder[item.order_id] = [];
+    itemsByOrder[item.order_id].push(item);
+  });
+
+  return {
+    orders: orders.map((o) => ({
+      ...formatOrderRow(o),
+      items: itemsByOrder[o.id] || [],
+    })),
+    pagination: {
+      total,
+      page: p,
+      limit: l,
+      totalPages: Math.ceil(total / l) || 1,
     },
   };
 }

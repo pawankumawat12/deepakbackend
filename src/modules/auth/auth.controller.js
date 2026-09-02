@@ -276,20 +276,32 @@ const sendOtp = async (req, res) => {
 
     if (!email) {
       return res.status(400).json({
-        message: "Email is required",
+        success: false,
+        message: "Email address is required.",
       });
     }
 
     const user = await findUserByEmail(email);
 
     if (!user) {
-      return res.status(404).json({ message: "Invalid Credentials" });
+      return res.status(404).json({
+        success: false,
+        message: "No registration found with this email address. Please create an account first.",
+      });
+    }
+
+    if (user.is_email_verified) {
+      return res.status(400).json({
+        success: false,
+        message: "Your email is already verified. Please sign in.",
+      });
     }
 
     const resend = await resendVerificationOtp(user, email, updateUser);
 
     return res.status(200).json({
-      message: "OTP resent successfully",
+      success: true,
+      message: "Verification code resent to your email.",
       data: {
         messageId: resend.result.messageId,
         resendCount: resend.resendCount,
@@ -300,8 +312,22 @@ const sendOtp = async (req, res) => {
   } catch (error) {
     console.error("Send OTP error:", error);
 
+    if (
+      error.code === "ETIMEDOUT" ||
+      error.code === "ESOCKET" ||
+      error.code === "ECONNREFUSED" ||
+      error.code === "ENETUNREACH" ||
+      error.command === "CONN"
+    ) {
+      return res.status(503).json({
+        success: false,
+        message: "Unable to send verification OTP email at this time. Please try again in a few moments.",
+      });
+    }
+
     return res.status(error.status || 500).json({
-      message: error.message || "Failed to send OTP",
+      success: false,
+      message: error.message || "Failed to send verification code. Please try again.",
       retryAfter: error.retryAfter,
       lockedUntil: error.lockedUntil,
     });
@@ -314,7 +340,8 @@ const verifyOtp = async (req, res) => {
 
     if (!email || !otp) {
       return res.status(400).json({
-        message: "Email and OTP are required",
+        success: false,
+        message: "Email and 4-digit verification code are required.",
       });
     }
 
@@ -323,19 +350,36 @@ const verifyOtp = async (req, res) => {
 
     if (!user) {
       return res.status(404).json({
-        message: "Invalid Credentials",
+        success: false,
+        message: "No registration found with this email address. Please create an account first.",
+      });
+    }
+
+    if (user.is_email_verified && !user.otp) {
+      return res.status(200).json({
+        success: true,
+        message: "Your account is already verified. Please sign in.",
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          role: user.role,
+        },
       });
     }
 
     if (!user.expire_at || new Date() > new Date(user.expire_at)) {
       return res.status(400).json({
-        message: "OTP has expired. Please click resend to get a new code.",
+        success: false,
+        message: "Verification code has expired. Please click 'Resend OTP' to get a new code.",
       });
     }
 
     if (String(user.otp).trim() !== String(otp).trim()) {
       return res.status(400).json({
-        message: "Invalid OTP code. Please check and try again.",
+        success: false,
+        message: "Invalid verification code. Please check the 4-digit code sent to your email.",
       });
     }
 
@@ -354,7 +398,7 @@ const verifyOtp = async (req, res) => {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
-      maxAge: 30 * 24 * 60 * 1000,
+      maxAge: 30 * 24 * 60 * 60 * 1000,
     });
 
     await updateUser(user.id, {
@@ -365,7 +409,8 @@ const verifyOtp = async (req, res) => {
     });
 
     return res.status(200).json({
-      message: "OTP verified successfully. Your account is now active!",
+      success: true,
+      message: "Email verified successfully! Welcome to SFC Cafe.",
       token: accessToken,
       user: {
         id: user.id,
@@ -380,7 +425,8 @@ const verifyOtp = async (req, res) => {
     console.error("Verify OTP error:", error);
 
     return res.status(500).json({
-      message: "Failed to verify OTP",
+      success: false,
+      message: "Verification failed. Please check your code and try again.",
     });
   }
 };
@@ -398,29 +444,48 @@ async function register(req, res) {
 
     if (!valid) {
       return res.status(400).json({
-        message: "Validation failed",
+        success: false,
+        message: Object.values(errors || {})[0] || "Validation failed",
         errors,
       });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const normalizedEmail = email ? email.trim().toLowerCase() : null;
+    const normalizedPhone = phone ? phone.trim() : null;
 
+    // 1. Check if user with this email already exists
     if (normalizedEmail) {
       const existingUser = await findUserByEmail(normalizedEmail);
 
       if (existingUser) {
-        // If email is ALREADY VERIFIED, it is permanently registered
+        // If ALREADY VERIFIED -> return 409 duplicate registration message
         if (existingUser.is_email_verified) {
-          return res.status(400).json({
-            message: "Email is already registered. Please log in.",
+          return res.status(409).json({
+            success: false,
+            message: "An account with this email address is already registered. Please sign in.",
           });
         }
 
-        // If email was submitted previously but NOT verified, update the credentials and issue fresh OTP
+        // If UNVERIFIED -> allow user to retry registration and receive fresh OTP!
+        if (normalizedPhone) {
+          const existingPhoneUser = await findUserByPhone(normalizedPhone);
+          if (existingPhoneUser && existingPhoneUser.id !== existingUser.id) {
+            if (existingPhoneUser.is_email_verified) {
+              return res.status(409).json({
+                success: false,
+                message: "This phone number is already registered with another account. Please sign in or use a different phone number.",
+              });
+            } else {
+              // Unlink phone from abandoned unverified registration
+              await updateUser(existingPhoneUser.id, { phone: null });
+            }
+          }
+        }
+
         await updateUser(existingUser.id, {
           name: name ? name.trim() : existingUser.name,
-          phone: phone ? phone.trim() : existingUser.phone,
+          phone: normalizedPhone || null,
           password: hashedPassword,
         });
 
@@ -432,6 +497,7 @@ async function register(req, res) {
         );
 
         return res.status(200).json({
+          success: true,
           message: "Verification code sent to your email.",
           data: {
             messageId: result.messageId,
@@ -442,21 +508,28 @@ async function register(req, res) {
       }
     }
 
-    // Check phone if provided
-    if (phone) {
-      const existingUser = await findUserByPhone(phone);
+    // 2. Check if phone is provided and belongs to another account
+    if (normalizedPhone) {
+      const existingPhoneUser = await findUserByPhone(normalizedPhone);
 
-      if (existingUser && existingUser.is_email_verified) {
-        return res.status(400).json({
-          message: "Phone number is already associated with another account",
-        });
+      if (existingPhoneUser) {
+        if (existingPhoneUser.is_email_verified) {
+          return res.status(409).json({
+            success: false,
+            message: "An account with this phone number is already registered. Please sign in.",
+          });
+        } else {
+          // Unlink phone from abandoned unverified registration
+          await updateUser(existingPhoneUser.id, { phone: null });
+        }
       }
     }
 
+    // 3. Create fresh unverified user record
     const user = await createUser({
       name: name.trim(),
       email: normalizedEmail,
-      phone: phone || null,
+      phone: normalizedPhone || null,
       password: hashedPassword,
       role: "user",
       is_email_verified: false,
@@ -467,6 +540,7 @@ async function register(req, res) {
     });
 
     return res.status(201).json({
+      success: true,
       message: "User registered successfully. Verification code sent to your email.",
       data: {
         messageId: result.messageId,
@@ -477,11 +551,46 @@ async function register(req, res) {
   } catch (error) {
     console.error("Registration error:", error);
 
-    return res.status(500).json({
-      message: "Server error",
+    if (
+      error.code === "ETIMEDOUT" ||
+      error.code === "ESOCKET" ||
+      error.code === "ECONNREFUSED" ||
+      error.code === "ENETUNREACH" ||
+      error.command === "CONN"
+    ) {
+      return res.status(503).json({
+        success: false,
+        message: "Unable to send verification OTP email at this time. Please check your connection and try again.",
+      });
+    }
+
+    if (error.code === "23505") {
+      const detail = String(error.detail || error.constraint || "").toLowerCase();
+      if (detail.includes("email")) {
+        return res.status(409).json({
+          success: false,
+          message: "An account with this email address is already registered. Please sign in.",
+        });
+      }
+      if (detail.includes("phone")) {
+        return res.status(409).json({
+          success: false,
+          message: "An account with this phone number is already registered. Please sign in.",
+        });
+      }
+      return res.status(409).json({
+        success: false,
+        message: "An account with these details already exists. Please sign in.",
+      });
+    }
+
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Registration could not be completed. Please try again.",
     });
   }
 }
+
 // REGISTER ADMIN
 async function registerAdmin(req, res) {
   try {
@@ -489,34 +598,47 @@ async function registerAdmin(req, res) {
     const { valid, errors } = validateRegister({ name, email, password });
 
     if (!valid) {
-      return res.status(400).json({ message: "Validation failed", errors });
+      return res.status(400).json({
+        success: false,
+        message: Object.values(errors || {})[0] || "Validation failed",
+        errors,
+      });
     }
 
     const adminCount = await countAdmins();
     if (adminCount > 0) {
       return res
         .status(403)
-        .json({ message: "Only one admin account is allowed." });
+        .json({ success: false, message: "Only one admin account is allowed." });
     }
 
     const existingUser = await findUserByEmail(email);
     if (existingUser) {
-      return res.status(400).json({ message: "Email already registered" });
+      return res.status(409).json({ success: false, message: "Email is already registered." });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const admin = await createUser({
-      name,
-      email,
-      password,
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      password: hashedPassword,
       role: "admin",
       is_email_verified: true,
     });
 
-    res.status(201).json({ message: "Admin registered successfully", admin });
+    res.status(201).json({
+      success: true,
+      message: "Admin registered successfully.",
+      admin: {
+        id: admin.id,
+        name: admin.name,
+        email: admin.email,
+        role: admin.role,
+      },
+    });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server error" });
+    console.error("Admin registration error:", error);
+    res.status(500).json({ success: false, message: "Failed to register admin account." });
   }
 }
 
@@ -526,55 +648,74 @@ async function login(req, res) {
     const { valid, errors } = validateLogin({ email, password, phone });
 
     if (!valid) {
-      return res.status(400).json({ message: "Validation failed", errors });
+      return res.status(400).json({
+        success: false,
+        message: Object.values(errors || {})[0] || "Validation failed",
+        errors,
+      });
     }
+
     let user;
     if (email) {
       const normalizedEmail = email.trim().toLowerCase();
       user = await findUserByEmail(normalizedEmail);
-
-      if (!user) {
-        return res.status(400).json({
-          message: "Invalid Credentials",
-        });
-      }
+    } else if (phone) {
+      user = await findUserByPhone(phone.trim());
     }
 
     if (!user || user.role !== "user") {
-      return res.status(404).json({ message: "Invalid credentials" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid email or password. Please check your credentials.",
+      });
     }
 
-    // Check phone if provided
-    if (phone) {
-      user = await findUserByPhone(phone);
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid email or password. Please check your credentials.",
+      });
+    }
 
-      if (!user) {
-        return res.status(400).json({
-          message: "Phone number is not registered",
+    // If user's email is NOT verified, generate fresh OTP and return 403
+    if (!user.is_email_verified) {
+      try {
+        const otpResult = await issueVerificationOtp(
+          user,
+          user.email,
+          updateUser
+        );
+        return res.status(403).json({
+          success: false,
+          requiresVerification: true,
+          email: user.email,
+          message:
+            "Your email is not verified yet. A fresh 4-digit verification code has been sent to your email.",
+          data: {
+            email: user.email,
+            messageId: otpResult.messageId,
+          },
+        });
+      } catch (otpErr) {
+        return res.status(403).json({
+          success: false,
+          requiresVerification: true,
+          email: user.email,
+          message:
+            "Your email is not verified. Please verify your email using the OTP sent to your inbox.",
         });
       }
     }
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ message: "Invalid credentials" });
-    }
 
-    // If user's email is NOT verified, generate fresh OTP, send it, and prompt verification!
-    if (!user.is_email_verified) {
-      const otpResult = await issueVerificationOtp(
-        user,
-        user.email,
-        updateUser
-      );
+    // If blocked
+    if (user.is_blocked) {
       return res.status(403).json({
-        requiresVerification: true,
-        email: user.email,
+        success: false,
+        isBlocked: true,
         message:
-          "Your email is not verified yet. A fresh verification OTP has been sent to your email.",
-        data: {
-          email: user.email,
-          messageId: otpResult.messageId,
-        },
+          user.block_reason ||
+          "Your account has been temporarily blocked. Please contact support or submit an unblock request.",
       });
     }
 
@@ -596,8 +737,9 @@ async function login(req, res) {
 
     await updateUser(user.id, { access_token: accessToken });
 
-    res.status(200).json({
-      message: "Login successful",
+    return res.status(200).json({
+      success: true,
+      message: "Login successful. Welcome back!",
       user: {
         id: user.id,
         name: user.name,
@@ -612,8 +754,11 @@ async function login(req, res) {
       },
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server error" });
+    console.error("Login error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Login failed. Please try again.",
+    });
   }
 }
 

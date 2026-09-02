@@ -10,6 +10,7 @@ const {
   acceptOrder,
   rejectOrder,
 } = require("../../models/order.model");
+const Crypto = require("crypto");
 
 const Address = require("../../models/address.model");
 const notificationModel = require("../../models/notification.model");
@@ -18,112 +19,829 @@ const {
   emitToUser,
   emitToOrder,
 } = require("../../socket/socket.service");
+const { createRazorpayOrder } = require("../../services/razorpayService");
+const db = require("../../../config/db");
 
 async function createOrder(req, res) {
   try {
     const userId = req.user.id;
+
     const {
       addressId,
+
       customerName: inputName,
+
       customerEmail = req.user.email || "",
+
       customerPhone: inputPhone,
+
       shippingAddress: inputShippingAddress,
+
       deliveryAddressJson: inputDeliveryJson,
+
       notes = "",
+
+      paymentMethod = "Cash on Delivery",
+
+      offerCode,
     } = req.body || {};
 
-    let finalShippingAddress = inputShippingAddress || "";
-    let finalDeliveryJson = inputDeliveryJson || null;
-    let finalCustomerName = inputName || req.user.name || "Customer";
-    let finalCustomerPhone = inputPhone || req.user.phone || "";
+    // 1. VALIDATE PAYMENT METHOD
+    const allowedPaymentMethods = [
+      "Cash on Delivery",
+      "Online Payment",
+    ];
 
-    // 1. If addressId is provided, look up saved address
-    if (addressId) {
-      const savedAddress = await Address.getAddressById(addressId, userId);
-      if (savedAddress && Number(savedAddress.user_id) === Number(userId)) {
-        finalCustomerName = savedAddress.receiver_name || finalCustomerName;
-        finalCustomerPhone = savedAddress.phone_number || finalCustomerPhone;
-
-        const parts = [
-          savedAddress.house_number,
-          savedAddress.building_name,
-          savedAddress.landmark ? `Near ${savedAddress.landmark}` : null,
-          savedAddress.formatted_address || `${savedAddress.city}, ${savedAddress.state} - ${savedAddress.pincode}`,
-        ].filter(Boolean);
-
-        finalShippingAddress = parts.join(", ");
-        finalDeliveryJson = savedAddress;
-      }
-    }
-
-    // 2. Validate that address is present
-    if (!finalShippingAddress && !finalDeliveryJson) {
+    if (!allowedPaymentMethods.includes(paymentMethod)) {
       return res.status(400).json({
         success: false,
-        message: "Please select or provide a delivery address before placing your order.",
+        message: "Invalid payment method.",
       });
     }
 
-    let parsedDeliveryJson = finalDeliveryJson;
-    if (typeof parsedDeliveryJson === "string") {
-      try {
-        parsedDeliveryJson = JSON.parse(parsedDeliveryJson);
-      } catch {}
+    // 2. INITIAL CUSTOMER / ADDRESS DATA
+    let finalShippingAddress =
+      inputShippingAddress || "";
+
+    let finalDeliveryJson =
+      inputDeliveryJson || null;
+
+    let finalCustomerName =
+      inputName ||
+      req.user.name ||
+      "Customer";
+
+    let finalCustomerPhone =
+      inputPhone ||
+      req.user.phone ||
+      "";
+
+    // 3. GET SAVED ADDRESS
+    if (addressId) {
+      const savedAddress =
+        await Address.getAddressById(
+          addressId,
+          userId
+        );
+
+      if (
+        savedAddress &&
+        Number(savedAddress.user_id) === Number(userId)
+      ) {
+        finalCustomerName =
+          savedAddress.receiver_name ||
+          finalCustomerName;
+
+        finalCustomerPhone =
+          savedAddress.phone_number ||
+          finalCustomerPhone;
+
+        const parts = [
+          savedAddress.house_number,
+
+          savedAddress.building_name,
+
+          savedAddress.floor
+            ? `Floor ${savedAddress.floor}`
+            : null,
+
+          savedAddress.landmark
+            ? `Near ${savedAddress.landmark}`
+            : null,
+
+          savedAddress.formatted_address ||
+            `${savedAddress.city}, ${savedAddress.state} - ${savedAddress.pincode}`,
+        ].filter(Boolean);
+
+        finalShippingAddress =
+          parts.join(", ");
+
+        // IMPORTANT:
+        // Save complete address snapshot in order
+        finalDeliveryJson =
+          savedAddress;
+      }
     }
 
-    const order = await createOrderWithTransaction({
-      userId,
-      customerName: finalCustomerName,
-      customerEmail,
-      customerPhone: finalCustomerPhone,
-      shippingAddress: finalShippingAddress,
-      deliveryAddressJson: parsedDeliveryJson,
-      paymentMethod: "Cash on Delivery",
-      paymentStatus: "Pending",
-      transactionId: null,
-      paymentDetailsJson: null,
-      notes,
-      offerCode: req.body?.offerCode || req.body?.couponCode || null,
-    });
+    // 4. VALIDATE DELIVERY ADDRESS
+    if (
+      !finalShippingAddress &&
+      !finalDeliveryJson
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Please select or provide a delivery address before placing your order.",
+      });
+    }
 
-    // Create Admin Notification in Database
+    // 5. PARSE DELIVERY JSON
+    let parsedDeliveryJson =
+      finalDeliveryJson;
+
+    if (
+      typeof parsedDeliveryJson === "string"
+    ) {
+      try {
+        parsedDeliveryJson =
+          JSON.parse(parsedDeliveryJson);
+      } catch {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Invalid delivery address data.",
+        });
+      }
+    }
+
+    // 6. PAYMENT STATUS
+    // New order always starts Pending.
+    // Pending -> admin can mark Paid when cash collected
+    // Online:
+    // Pending -> Razorpay verification -> Paid
+
+    const initialPaymentStatus =
+      "Pending";
+
+    // 7. CREATE LOCAL ORDER
+    const order =
+      await createOrderWithTransaction({
+        userId,
+
+        customerName:
+          finalCustomerName,
+
+        customerEmail,
+
+        customerPhone:
+          finalCustomerPhone,
+
+        shippingAddress:
+          finalShippingAddress,
+
+        deliveryAddressJson:
+          parsedDeliveryJson,
+
+        paymentMethod,
+
+        paymentStatus:
+          initialPaymentStatus,
+
+        transactionId:
+          null,
+
+        paymentDetailsJson:
+          null,
+
+        notes,
+
+        offerCode:
+          offerCode ||
+          req.body?.couponCode ||
+          null,
+
+        // COD:
+        // finalize immediately
+        //
+        // ONLINE:
+        // don't decrease stock
+        // don't clear cart
+        // don't increment offer usage
+        //
+        finalizeOrder:
+          paymentMethod ===
+          "Cash on Delivery",
+      });
+
+    // 8. CREATE RAZORPAY ORDER FOR ONLINE PAYMENT
+
+    let razorpayOrder = null;
+
+    if (
+      paymentMethod ===
+      "Online Payment"
+    ) {
+      try {
+        razorpayOrder =
+          await createRazorpayOrder({
+            amount:
+              Number(order.total_amount),
+
+            receipt:
+              order.order_number,
+
+            notes: {
+              local_order_id:
+                String(order.id),
+
+              order_number:
+                order.order_number,
+
+              user_id:
+                String(userId),
+            },
+          });
+
+        // SAVE RAZORPAY ORDER ID
+        const [updatedOrder] =
+          await db("orders")
+            .where({
+              id: order.id,
+            })
+            .update({
+              razorpay_order_id:
+                razorpayOrder.id,
+
+              updated_at:
+                db.fn.now(),
+            })
+            .returning("*");
+
+        if (updatedOrder) {
+          Object.assign(
+            order,
+            updatedOrder
+          );
+        } else {
+          order.razorpay_order_id =
+            razorpayOrder.id;
+        }
+      } catch (razorpayError) {
+        console.error(
+          "Razorpay order creation error:",
+          razorpayError
+        );
+
+        // Razorpay order create fail ho gaya,
+        // local order ko failed/cancelled state
+        // mein update karo.
+
+        await db("orders")
+          .where({
+            id: order.id,
+          })
+          .update({
+            status: "Payment Failed",
+
+            payment_status: "Failed",
+
+            payment_details_json: JSON.stringify({
+              error:
+                razorpayError.message,
+
+              stage:
+                "RAZORPAY_ORDER_CREATION",
+
+              failed_at:
+                new Date().toISOString(),
+            }),
+
+            updated_at:
+              db.fn.now(),
+          });
+
+        return res.status(500).json({
+          success: false,
+          message:
+            "Unable to initialize online payment. Please try again.",
+        });
+      }
+    }
+
+    // 9. ADMIN NOTIFICATION
     await notificationModel.createNotification({
       role: "admin",
+
       type: "order_created",
-      title: `New COD Order: #${order.order_number || order.id}`,
-      message: `${finalCustomerName} placed a Cash on Delivery order worth ₹${order.total_amount}.`,
-      orderId: order.id,
+
+      title:
+        `New ${paymentMethod} Order: #${
+          order.order_number || order.id
+        }`,
+
+      message:
+        `${finalCustomerName} placed a ${paymentMethod} order worth ₹${order.total_amount}.`,
+
+      orderId:
+        order.id,
+
       dataJson: {
-        orderId: order.id,
-        orderNumber: order.order_number || `#SFC-${order.id}`,
-        customerName: finalCustomerName,
-        totalAmount: order.total_amount,
-        paymentMethod: "Cash on Delivery",
-        paymentStatus: order.payment_status,
+        orderId:
+          order.id,
+
+        orderNumber:
+          order.order_number ||
+          `#SFC-${order.id}`,
+
+        customerName:
+          finalCustomerName,
+
+        totalAmount:
+          order.total_amount,
+
+        paymentMethod,
+
+        paymentStatus:
+          order.payment_status,
+
+        orderStatus:
+          order.status,
       },
     });
 
-    // Real-time Socket.IO emission to admin
-    emitToAdmin("admin_new_order", {
-      order,
-      message: `New order #${order.order_number || order.id} from ${finalCustomerName}`,
-    });
+    // 10. SOCKET.IO ADMIN EVENT
+
+    emitToAdmin(
+      "admin_new_order",
+      {
+        order,
+
+        message:
+          `New ${paymentMethod} order #${
+            order.order_number ||
+            order.id
+          } from ${finalCustomerName}`,
+      }
+    );
+
+    // 11. RESPONSE
 
     return res.status(201).json({
       success: true,
-      message: "Order placed successfully",
-      data: order,
+
+      message:
+        paymentMethod ===
+        "Online Payment"
+          ? "Order created. Proceed to payment."
+          : "Order placed successfully",
+
+      data: {
+        ...order,
+
+        // RAZORPAY DATA
+        razorpayOrderId:
+          razorpayOrder?.id ||
+          null,
+
+        razorpayKeyId:
+          paymentMethod ===
+          "Online Payment"
+            ? process.env
+                .RAZORPAY_KEY_ID
+            : null,
+
+        paymentAmount:
+          paymentMethod ===
+          "Online Payment"
+            ? Number(
+                order.total_amount
+              )
+            : null,
+
+        paymentCurrency:
+          paymentMethod ===
+          "Online Payment"
+            ? "INR"
+            : null,
+      },
     });
   } catch (error) {
-    console.error("Create order error:", error);
-    const status = error.statusCode || 500;
+    console.error(
+      "Create order error:",
+      error
+    );
+
+    const status =
+      error.statusCode || 500;
+
     return res.status(status).json({
       success: false,
-      message: error.message || "Failed to place order",
+
+      message:
+        error.message ||
+        "Failed to place order",
     });
   }
 }
 
+
+// verify the razor pay
+async function verifyRazorpayPayment(req, res) {
+  try {
+    const userId = req.user.id;
+
+    const {
+      orderId,
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+    } = req.body || {};
+
+    // 1. VALIDATE REQUEST
+    if (
+      !orderId ||
+      !razorpay_order_id ||
+      !razorpay_payment_id ||
+      !razorpay_signature
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment verification data is incomplete.",
+      });
+    }
+
+    // 2. FIND LOCAL ORDER
+    const order = await db("orders")
+      .where({
+        id: orderId,
+        user_id: userId,
+      })
+      .first();
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found.",
+      });
+    }
+
+    // 3. MAKE SURE THIS IS ONLINE PAYMENT
+    if (order.payment_method !== "Online Payment") {
+      return res.status(400).json({
+        success: false,
+        message: "This order is not an online payment order.",
+      });
+    }
+
+    // 4. CHECK RAZORPAY ORDER ID
+    if (
+      order.razorpay_order_id &&
+      order.razorpay_order_id !== razorpay_order_id
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Razorpay order ID.",
+      });
+    }
+
+    // 5. ALREADY PAID CHECK
+    if (order.payment_status === "Paid") {
+      return res.status(200).json({
+        success: true,
+        message: "Payment is already verified.",
+        data: {
+          orderId: order.id,
+          orderNumber: order.order_number,
+          paymentStatus: order.payment_status,
+          orderStatus: order.status,
+        },
+      });
+    }
+
+    // 6. VERIFY RAZORPAY SIGNATURE
+    const generatedSignature = Crypto.createHmac(
+        "sha256",
+        process.env.RAZORPAY_KEY_SECRET
+      )
+      .update(
+        `${razorpay_order_id}|${razorpay_payment_id}`
+      )
+      .digest("hex");
+
+    if (
+      generatedSignature !==
+      razorpay_signature
+    ) {
+      console.error(
+        "Invalid Razorpay signature",
+        {
+          orderId,
+          razorpay_order_id,
+          razorpay_payment_id,
+        }
+      );
+
+      return res.status(400).json({
+        success: false,
+        message: "Payment verification failed.",
+      });
+    }
+
+    // 7. FINALIZE PAYMENT + ORDER IN DB TRANSACTION
+    const result = await db.transaction(async (trx) => {
+      // Get order again using transaction
+      const currentOrder = await trx("orders")
+        .where({
+          id: orderId,
+          user_id: userId,
+        })
+        .forUpdate()
+        .first();
+
+      if (!currentOrder) {
+        const err = new Error("Order not found.");
+        err.statusCode = 404;
+        throw err;
+      }
+
+      // Idempotency check
+      if (
+        currentOrder.payment_status === "Paid"
+      ) {
+        return currentOrder;
+      }
+
+      // Get order items
+      const orderItems = await trx("order_items")
+        .where({
+          order_id: currentOrder.id,
+        })
+        .forUpdate();
+
+      if (
+        !orderItems ||
+        orderItems.length === 0
+      ) {
+        const err = new Error(
+          "Order items not found."
+        );
+
+        err.statusCode = 400;
+
+        throw err;
+      }
+
+      // DECREASE STOCK
+      for (const item of orderItems) {
+        const isMadeToOrder =
+          item.availability_type ===
+          "MADE_TO_ORDER";
+
+        // MADE_TO_ORDER doesn't consume stock
+        if (isMadeToOrder) {
+          continue;
+        }
+
+        const quantity =
+          Number(item.quantity) || 0;
+
+        if (quantity <= 0) {
+          const err = new Error(
+            `Invalid quantity for product ${item.product_id}.`
+          );
+
+          err.statusCode = 400;
+
+          throw err;
+        }
+
+        // Lock product row
+        const product = await trx("products")
+          .where({
+            id: item.product_id,
+          })
+          .forUpdate()
+          .first();
+
+        if (!product) {
+          const err = new Error(
+            `Product "${item.product_name}" no longer exists.`
+          );
+
+          err.statusCode = 400;
+
+          throw err;
+        }
+
+        if (!product.is_active) {
+          const err = new Error(
+            `Product "${item.product_name}" is no longer available.`
+          );
+
+          err.statusCode = 400;
+
+          throw err;
+        }
+
+        const currentStock =
+          Number(product.stock) || 0;
+
+        if (currentStock < quantity) {
+          const err = new Error(
+            `Insufficient stock for "${item.product_name}".`
+          );
+
+          err.statusCode = 400;
+
+          throw err;
+        }
+
+        await trx("products")
+          .where({
+            id: item.product_id,
+          })
+          .update({
+            stock: currentStock - quantity,
+            updated_at: trx.fn.now(),
+          });
+      }
+
+      // INCREMENT OFFER USAGE
+      let pricing = currentOrder.pricing_details_json;
+
+      if (
+        typeof pricing === "string"
+      ) {
+        try {
+          pricing = JSON.parse(pricing);
+        } catch {
+          pricing = null;
+        }
+      }
+
+      if (
+        pricing?.applied_offer?.id
+      ) {
+        const {
+          incrementOfferUsage,
+        } = require("./offer.model");
+
+        await incrementOfferUsage(
+          pricing.applied_offer.id,
+          trx
+        );
+      }
+
+      await trx("cart_items")
+        .where({
+          user_id: userId,
+        })
+        .del();
+
+      // UPDATE ORDER ITEMS
+      for (const item of orderItems) {
+        const isMadeToOrder =
+          item.availability_type ===
+          "MADE_TO_ORDER";
+
+        await trx("order_items")
+          .where({
+            id: item.id,
+          })
+          .update({
+            production_status:
+              isMadeToOrder
+                ? "PENDING_PRODUCTION"
+                : "COMPLETED",
+
+            updated_at: trx.fn.now(),
+          });
+      }
+
+      // UPDATE ORDER PAYMENT
+      const paymentDetails = {
+        razorpay_order_id:
+          razorpay_order_id,
+
+        razorpay_payment_id:
+          razorpay_payment_id,
+
+        razorpay_signature:
+          razorpay_signature,
+
+        verified_at:
+          new Date().toISOString(),
+      };
+
+      const [updatedOrder] =
+        await trx("orders")
+          .where({
+            id: currentOrder.id,
+          })
+          .update({
+            payment_status: "Paid",
+
+            transaction_id:
+              razorpay_payment_id,
+
+            payment_details_json:
+              JSON.stringify(
+                paymentDetails
+              ),
+
+            status: "Preparing",
+
+            updated_at:
+              trx.fn.now(),
+          })
+          .returning("*");
+
+      return updatedOrder;
+    });
+
+    // 8. ADMIN NOTIFICATION
+    await notificationModel.createNotification({
+      role: "admin",
+
+      type: "payment_success",
+
+      title:
+        `Payment Received: #${
+          result.order_number ||
+          result.id
+        }`,
+
+      message:
+        `Online payment of ₹${result.total_amount} received successfully for order #${
+          result.order_number
+        }.`,
+
+      orderId:
+        result.id,
+
+      dataJson: {
+        orderId:
+          result.id,
+
+        orderNumber:
+          result.order_number,
+
+        customerName:
+          result.customer_name,
+
+        totalAmount:
+          result.total_amount,
+
+        paymentMethod:
+          result.payment_method,
+
+        paymentStatus:
+          result.payment_status,
+
+        orderStatus:
+          result.status,
+
+        razorpayPaymentId:
+          razorpay_payment_id,
+      },
+    });
+
+    // 9. SOCKET EVENT
+    emitToAdmin(
+      "payment_success",
+      {
+        order: result,
+
+        message:
+          `Payment received for order #${result.order_number}`,
+      }
+    );
+
+    // 10. RESPONSE
+    return res.status(200).json({
+      success: true,
+
+      message:
+        "Payment verified successfully.",
+
+      data: {
+        orderId:
+          result.id,
+
+        orderNumber:
+          result.order_number,
+
+        paymentStatus:
+          result.payment_status,
+
+        orderStatus:
+          result.status,
+
+        transactionId:
+          result.transaction_id,
+
+        totalAmount:
+          result.total_amount,
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Razorpay payment verification error:",
+      error
+    );
+
+    const status =
+      error.statusCode || 500;
+
+    return res.status(status).json({
+      success: false,
+
+      message:
+        error.message ||
+        "Payment verification failed.",
+    });
+  }
+}
 async function getUserOrders(req, res) {
   try {
     const { page, limit, status } = req.query || {};
@@ -499,4 +1217,5 @@ module.exports = {
   updatePaymentStatusController,
   acceptOrderController,
   rejectOrderController,
+  verifyRazorpayPayment
 };

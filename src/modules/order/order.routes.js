@@ -11,6 +11,7 @@ const {
   updatePaymentStatusController,
   acceptOrderController,
   rejectOrderController,
+  verifyRazorpayPayment,
 } = require("./order.controller");
 
 const router = express.Router();
@@ -18,6 +19,7 @@ const router = express.Router();
 // Authenticated customer routes
 router.use(verifyToken);
 router.post("/", createOrder);
+router.post("/verify-payment", verifyRazorpayPayment);
 router.get("/", getUserOrders);
 router.get("/:id", getOrderDetails);
 router.post("/:id/cancel", cancelUserOrder);

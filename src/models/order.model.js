@@ -7,6 +7,7 @@ function generateOrderNumber() {
   return `SFC-${timestamp}${random}`;
 }
 
+//order transaction create
 async function createOrderWithTransaction({
   userId,
   customerName,
@@ -15,14 +16,14 @@ async function createOrderWithTransaction({
   shippingAddress,
   deliveryAddressJson,
   paymentMethod = "Cash on Delivery",
-  paymentStatus,
-  transactionId,
-  paymentDetailsJson,
-  notes,
+  paymentStatus = "Pending",
+  transactionId = null,
+  paymentDetailsJson = null,
+  notes = "",
   offerCode = null,
+  finalizeOrder = true,
 }) {
   return db.transaction(async (trx) => {
-    // 1. Fetch current cart items with lock
     const rawCartItems = await trx("cart_items")
       .select([
         "cart_items.id as cart_item_id",
@@ -46,28 +47,32 @@ async function createOrderWithTransaction({
       throw err;
     }
 
-    // 2. Validate availability and stock
+    // 2. VALIDATE PRODUCT AVAILABILITY + STOCK
     for (const item of rawCartItems) {
       if (!item.is_active) {
         const err = new Error(
           `Item "${item.name}" is currently unavailable. Please remove it from your cart.`
         );
+
         err.statusCode = 400;
         throw err;
       }
+
+      // MADE_TO_ORDER does not require stock
       if (
         item.availability_type !== "MADE_TO_ORDER" &&
-        item.stock < item.quantity
+        Number(item.stock) < Number(item.quantity)
       ) {
         const err = new Error(
           `Item "${item.name}" only has ${item.stock} in stock. Please adjust quantity.`
         );
+
         err.statusCode = 400;
         throw err;
       }
     }
 
-    // 3. Recalculate complete pricing atomically with latest settings & dynamic offer
+    // 3. CALCULATE PRICING AGAIN ON BACKEND
     const pricing = await calculateCartAndOrderPricing({
       items: rawCartItems,
       deliveryAddress: deliveryAddressJson,
@@ -75,33 +80,44 @@ async function createOrderWithTransaction({
       offerCode,
     });
 
+    // 4. MINIMUM ORDER VALIDATION
     if (pricing.is_below_minimum_order) {
       const err = new Error(
         `Minimum order amount is ₹${pricing.minimum_order_amount}. Please add items worth ₹${pricing.minimum_order_shortfall} more to proceed.`
       );
+
       err.statusCode = 400;
       throw err;
     }
 
+    // 5. DELIVERY RANGE VALIDATION
     if (pricing.is_out_of_range) {
       const err = new Error(
         `Your delivery address is ${pricing.distance_km} km away, which exceeds our maximum delivery radius of ${pricing.max_delivery_distance} km.`
       );
+
       err.statusCode = 400;
       throw err;
     }
 
-    // 4. Create Order Record with full pricing snapshot
+    // 6. GENERATE ORDER NUMBER
     const orderNumber = generateOrderNumber();
+
+    // 7. CREATE LOCAL ORDER
     const [order] = await trx("orders")
       .insert({
         order_number: orderNumber,
+
         user_id: userId,
+
         customer_name: customerName,
         customer_email: customerEmail,
         customer_phone: customerPhone,
+
         shipping_address: shippingAddress,
         delivery_address_json: deliveryAddressJson,
+
+        // Pricing snapshot
         subtotal: pricing.subtotal,
         delivery_fee: pricing.delivery_fee,
         discount: pricing.discount,
@@ -109,35 +125,54 @@ async function createOrderWithTransaction({
         packaging_fee: pricing.packaging_fee,
         platform_fee: pricing.platform_fee,
         cod_fee: pricing.cod_fee,
+
         distance_km: pricing.distance_km || 0,
+
         tax_inclusive: pricing.tax_inclusive,
+
         total_amount: pricing.grand_total,
+
+        // Store complete pricing calculation at order time
         pricing_details_json: pricing,
-        status: "Preparing",
-        payment_method: "Cash on Delivery",
-        payment_status: "Pending",
-        transaction_id: null,
-        payment_details_json: null,
-        notes,
+
+        // Order starts in Preparing for COD.
+        // Online payment can remain Pending until payment verification.
+        status:
+          paymentMethod === "Online Payment" && paymentStatus !== "Paid"
+            ? "Pending Payment"
+            : "Preparing",
+
+        // Payment information
+        payment_method: paymentMethod,
+
+        payment_status: paymentStatus || "Pending",
+
+        transaction_id: transactionId || null,
+
+        payment_details_json: paymentDetailsJson || null,
+
+        notes: notes || "",
+
         created_at: trx.fn.now(),
         updated_at: trx.fn.now(),
       })
       .returning("*");
 
-    // Increment used_count for applied offer
-    if (pricing.applied_offer?.id) {
-      const { incrementOfferUsage } = require("./offer.model");
-      await incrementOfferUsage(pricing.applied_offer.id, trx);
-    }
-
-    // 5. Create Order Items and Decrease Stock for IN_STOCK items
+    // 8. CREATE ORDER ITEMS
     const orderItemsToInsert = [];
+
     for (const item of rawCartItems) {
       const price = Number(item.price) || 0;
       const quantity = Number(item.quantity) || 1;
+
       const itemTotal = price * quantity;
-      const isMadeToOrder = item.availability_type === "MADE_TO_ORDER";
+
+      const isMadeToOrder =
+        item.availability_type === "MADE_TO_ORDER";
+
+      // Parse product images
       let images = [];
+
       try {
         images =
           typeof item.images === "string"
@@ -146,47 +181,111 @@ async function createOrderWithTransaction({
       } catch {
         images = [];
       }
-      const image =
-        Array.isArray(images) && images.length > 0 ? images[0] : null;
 
-      if (!isMadeToOrder) {
-        // Atomic stock decrease for IN_STOCK
-        const currentStock = Number(item.stock) || 0;
-        const newStock = Math.max(0, currentStock - quantity);
-        await trx("products").where({ id: item.product_id }).update({
-          stock: newStock,
-          updated_at: trx.fn.now(),
-        });
+      const image =
+        Array.isArray(images) && images.length > 0
+          ? images[0]
+          : null;
+
+      // STOCK DECREASE
+      // Only finalize stock when order is actually finalized.
+      // Online Payment:
+      // finalizeOrder = false
+      // stock will be decreased after successful payment
+      //
+
+      if (finalizeOrder && !isMadeToOrder) {
+        const quantityToRemove = quantity;
+
+        const updatedRows = await trx("products")
+          .where("id", item.product_id)
+          .where("stock", ">=", quantityToRemove)
+          .update({
+            stock: trx.raw("stock - ?", [quantityToRemove]),
+            updated_at: trx.fn.now(),
+          });
+
+        if (updatedRows === 0) {
+          const err = new Error(
+            `Item "${item.name}" is no longer available in the requested quantity.`
+          );
+
+          err.statusCode = 400;
+          throw err;
+        }
       }
 
+      // ORDER ITEM
       orderItemsToInsert.push({
         order_id: order.id,
+
         product_id: item.product_id,
+
         product_name: item.name,
+
         price,
+
         quantity,
+
         total: itemTotal,
-        availability_type: item.availability_type || "IN_STOCK",
-        production_status: isMadeToOrder ? "PENDING_PRODUCTION" : "COMPLETED",
+
+        availability_type:
+          item.availability_type || "IN_STOCK",
+
+        production_status: isMadeToOrder
+          ? "PENDING_PRODUCTION"
+          : finalizeOrder
+            ? "COMPLETED"
+            : "PENDING",
+
         image,
+
         created_at: trx.fn.now(),
         updated_at: trx.fn.now(),
       });
     }
 
+    // 9. INSERT ORDER ITEMS
     const insertedItems = await trx("order_items")
       .insert(orderItemsToInsert)
       .returning("*");
 
-    // 6. Clear user cart
-    await trx("cart_items").where({ user_id: userId }).del();
+    // 10. OFFER USAGE
+    // Only count offer usage when order is actually finalized.
+    //
+    // For online payment:
+    // offer usage should happen after successful payment.
+    //
 
+    if (
+      finalizeOrder &&
+      pricing.applied_offer?.id
+    ) {
+      const { incrementOfferUsage } = require("./offer.model");
+
+      await incrementOfferUsage(
+        pricing.applied_offer.id,
+        trx
+      );
+    }
+
+    // 11. CLEAR CART
+    // COD -> clear immediately
+
+    if (finalizeOrder) {
+      await trx("cart_items")
+        .where({ user_id: userId })
+        .del();
+    }
+
+    // 12. RETURN ORDER
     return {
       ...order,
       items: insertedItems,
     };
   });
 }
+
 
 function formatOrderRow(order) {
   if (!order) return null;

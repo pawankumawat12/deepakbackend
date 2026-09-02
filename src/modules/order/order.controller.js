@@ -21,6 +21,7 @@ const {
 } = require("../../socket/socket.service");
 const { createRazorpayOrder } = require("../../services/razorpayService");
 const db = require("../../../config/db");
+const { incrementOfferUsage } = require("../../models/offer.model");
 
 async function createOrder(req, res) {
   try {
@@ -660,10 +661,7 @@ async function verifyRazorpayPayment(req, res) {
       if (
         pricing?.applied_offer?.id
       ) {
-        const {
-          incrementOfferUsage,
-        } = require("./offer.model");
-
+      
         await incrementOfferUsage(
           pricing.applied_offer.id,
           trx

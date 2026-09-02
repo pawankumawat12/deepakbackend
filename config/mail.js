@@ -1,6 +1,10 @@
-const { sendMail, getActiveSmtpConfig } = require("../src/services/smtp.service");
+const {
+  createTransporter,
+  sendMail,
+  getActiveSmtpConfig,
+} = require("../src/services/smtp.service");
 
-// Dynamic Transporter Bridge (delegates sendMail to the database-driven smtp.service)
+// Environment-driven Transporter Bridge
 const transporter = {
   sendMail: async function (options) {
     return await sendMail({
@@ -10,8 +14,11 @@ const transporter = {
       html: options.html,
     });
   },
-  getConfig: async function () {
-    return await getActiveSmtpConfig();
+  getConfig: function () {
+    return getActiveSmtpConfig();
+  },
+  getTransporter: function () {
+    return createTransporter();
   },
 };
 

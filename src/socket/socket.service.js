@@ -136,6 +136,45 @@ function emitToAll(event, data) {
   }
 }
 
+/**
+ * Check if at least one admin socket is currently present in a given order chat room.
+ * Admin sockets are identified by membership in the shared "admin" room.
+ * @param {string|number} orderId
+ * @returns {boolean}
+ */
+function isAdminInOrderRoom(orderId) {
+  if (!io) return false;
+  const orderRoom = io.sockets.adapter.rooms.get(`order_${orderId}`);
+  if (!orderRoom || orderRoom.size === 0) return false;
+  const adminRoom = io.sockets.adapter.rooms.get("admin");
+  if (!adminRoom || adminRoom.size === 0) return false;
+  for (const socketId of orderRoom) {
+    if (adminRoom.has(socketId)) return true;
+  }
+  return false;
+}
+
+/**
+ * Check if a specific customer is currently present in a given order chat room.
+ * Customer sockets carry their userId in the handshake query.
+ * @param {string|number} userId
+ * @param {string|number} orderId
+ * @returns {boolean}
+ */
+function isCustomerInOrderRoom(userId, orderId) {
+  if (!io || !userId) return false;
+  const orderRoom = io.sockets.adapter.rooms.get(`order_${orderId}`);
+  if (!orderRoom || orderRoom.size === 0) return false;
+  for (const socketId of orderRoom) {
+    const sock = io.sockets.sockets.get(socketId);
+    if (!sock) continue;
+    const uid =
+      sock.handshake?.query?.userId || sock.handshake?.auth?.userId;
+    if (uid && String(uid) === String(userId)) return true;
+  }
+  return false;
+}
+
 module.exports = {
   initSocket,
   getIO,
@@ -143,5 +182,7 @@ module.exports = {
   emitToUser,
   emitToOrder,
   emitToAll,
+  isAdminInOrderRoom,
+  isCustomerInOrderRoom,
 };
 

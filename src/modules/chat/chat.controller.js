@@ -1,7 +1,7 @@
 const orderModel = require("../../models/order.model");
 const orderMessageModel = require("../../models/orderMessage.model");
 const notificationModel = require("../../models/notification.model");
-const { emitToOrder, emitToAdmin, emitToUser } = require("../../socket/socket.service");
+const { emitToOrder, emitToAdmin, emitToUser, isAdminInOrderRoom, isCustomerInOrderRoom } = require("../../socket/socket.service");
 
 /**
  * Get chat history for a specific order and mark unread messages as read
@@ -123,42 +123,59 @@ async function postOrderMessage(req, res) {
       message: savedMessage,
     });
 
-    // 2. Send notification to counterpart
+    // 2. Send notification to counterpart only if they are NOT actively in this chat room.
+    //    If the recipient is present in order_<id> room, they already see the live message —
+    //    no notification badge is needed. If they're offline/disconnected, save it to DB
+    //    so the badge appears when they return.
     if (senderRole === "customer") {
-      // Notify admin
-      await notificationModel.createNotification({
-        role: "admin",
-        type: "chat_message",
-        title: `New Message on #${order.order_number || order.id}`,
-        message: `${senderName}: ${message.substring(0, 80)}`,
-        orderId: order.id,
-        dataJson: { orderId: order.id, senderName, messageText: message },
-      });
-
-      emitToAdmin("admin_new_message", {
-        orderId: order.id,
-        orderNumber: order.order_number || `#SFC-${order.id}`,
-        customerName: senderName,
-        message: savedMessage,
-      });
-    } else {
-      // Notify customer
-      if (order.user_id) {
+      // Notify admin only when no admin socket is in this order room
+      const adminPresent = isAdminInOrderRoom(orderId);
+      if (!adminPresent) {
         await notificationModel.createNotification({
-          userId: order.user_id,
-          role: "customer",
+          role: "admin",
           type: "chat_message",
-          title: `New Message from SFC Cafe`,
-          message: `Regarding Order #${order.order_number || order.id}: ${message.substring(0, 80)}`,
+          title: `New Message on #${order.order_number || order.id}`,
+          message: `${senderName}: ${(message || "").substring(0, 80)}`,
           orderId: order.id,
-          dataJson: { orderId: order.id, messageText: message },
+          dataJson: { orderId: order.id, senderName, messageText: message },
         });
 
-        emitToUser(order.user_id, "customer_new_message", {
+        emitToAdmin("admin_new_message", {
           orderId: order.id,
           orderNumber: order.order_number || `#SFC-${order.id}`,
+          customerName: senderName,
           message: savedMessage,
         });
+      } else {
+        console.log(
+          `[Chat] Admin is active in order_${orderId} room — skipping notification`
+        );
+      }
+    } else {
+      // Notify customer only when they are NOT in this order room
+      if (order.user_id) {
+        const customerPresent = isCustomerInOrderRoom(order.user_id, orderId);
+        if (!customerPresent) {
+          await notificationModel.createNotification({
+            userId: order.user_id,
+            role: "customer",
+            type: "chat_message",
+            title: `New Message from SFC Cafe`,
+            message: `Regarding Order #${order.order_number || order.id}: ${(message || "").substring(0, 80)}`,
+            orderId: order.id,
+            dataJson: { orderId: order.id, messageText: message },
+          });
+
+          emitToUser(order.user_id, "customer_new_message", {
+            orderId: order.id,
+            orderNumber: order.order_number || `#SFC-${order.id}`,
+            message: savedMessage,
+          });
+        } else {
+          console.log(
+            `[Chat] Customer ${order.user_id} is active in order_${orderId} room — skipping notification`
+          );
+        }
       }
     }
 

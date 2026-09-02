@@ -61,10 +61,7 @@ function getActiveSmtpConfig() {
   };
 }
 
-/**
- * Creates a Nodemailer transport strictly bound to IPv4.
- * Uses explicit host, port, secure, and auth settings without service: "gmail".
- */
+
 async function createTransporter(config = null) {
   const activeConfig = config || getActiveSmtpConfig();
 

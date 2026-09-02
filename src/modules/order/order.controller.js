@@ -110,7 +110,7 @@ async function createOrder(req, res) {
             : null,
 
           savedAddress.formatted_address ||
-            `${savedAddress.city}, ${savedAddress.state} - ${savedAddress.pincode}`,
+          `${savedAddress.city}, ${savedAddress.state} - ${savedAddress.pincode}`,
         ].filter(Boolean);
 
         finalShippingAddress =
@@ -315,8 +315,7 @@ async function createOrder(req, res) {
       type: "order_created",
 
       title:
-        `New ${paymentMethod} Order: #${
-          order.order_number || order.id
+        `New ${paymentMethod} Order: #${order.order_number || order.id
         }`,
 
       message:
@@ -357,9 +356,8 @@ async function createOrder(req, res) {
         order,
 
         message:
-          `New ${paymentMethod} order #${
-            order.order_number ||
-            order.id
+          `New ${paymentMethod} order #${order.order_number ||
+          order.id
           } from ${finalCustomerName}`,
       }
     );
@@ -371,7 +369,7 @@ async function createOrder(req, res) {
 
       message:
         paymentMethod ===
-        "Online Payment"
+          "Online Payment"
           ? "Order created. Proceed to payment."
           : "Order placed successfully",
 
@@ -385,22 +383,22 @@ async function createOrder(req, res) {
 
         razorpayKeyId:
           paymentMethod ===
-          "Online Payment"
+            "Online Payment"
             ? process.env
-                .RAZORPAY_KEY_ID
+              .RAZORPAY_KEY_ID
             : null,
 
         paymentAmount:
           paymentMethod ===
-          "Online Payment"
+            "Online Payment"
             ? Number(
-                order.total_amount
-              )
+              order.total_amount
+            )
             : null,
 
         paymentCurrency:
           paymentMethod ===
-          "Online Payment"
+            "Online Payment"
             ? "INR"
             : null,
       },
@@ -500,9 +498,9 @@ async function verifyRazorpayPayment(req, res) {
 
     // 6. VERIFY RAZORPAY SIGNATURE
     const generatedSignature = Crypto.createHmac(
-        "sha256",
-        process.env.RAZORPAY_KEY_SECRET
-      )
+      "sha256",
+      process.env.RAZORPAY_KEY_SECRET
+    )
       .update(
         `${razorpay_order_id}|${razorpay_payment_id}`
       )
@@ -746,14 +744,12 @@ async function verifyRazorpayPayment(req, res) {
       type: "payment_success",
 
       title:
-        `Payment Received: #${
-          result.order_number ||
-          result.id
+        `Payment Received: #${result.order_number ||
+        result.id
         }`,
 
       message:
-        `Online payment of ₹${result.total_amount} received successfully for order #${
-          result.order_number
+        `Online payment of ₹${result.total_amount} received successfully for order #${result.order_number
         }.`,
 
       orderId:
@@ -1108,7 +1104,7 @@ async function cancelUserOrder(req, res) {
   try {
     const orderId = Number(req.params.id);
     const { cancelReason } = req.body;
-    
+
     if (!orderId) {
       return res.status(400).json({ success: false, message: "Invalid order ID" });
     }

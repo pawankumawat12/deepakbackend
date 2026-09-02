@@ -1,6 +1,12 @@
 require("dotenv").config();
-const http = require("http");
+const dns = require("dns");
 
+// Force IPv4 first on Render / Cloud Linux environments to avoid ENETUNREACH / ETIMEDOUT on IPv6
+if (dns.setDefaultResultOrder) {
+  dns.setDefaultResultOrder("ipv4first");
+}
+
+const http = require("http");
 const app = require("./app");
 const db = require("./config/db");
 const { initSocket } = require("./src/socket/socket.service");

@@ -1,18 +1,46 @@
 const nodemailer = require("nodemailer");
+const dns = require("dns");
+
+// Ensure IPv4 is prioritized in this process
+if (dns.setDefaultResultOrder) {
+  dns.setDefaultResultOrder("ipv4first");
+}
+
+/**
+ * Custom DNS lookup function that strictly forces IPv4 resolution.
+ * This completely eliminates ENETUNREACH errors on cloud platforms like Render.
+ */
+function ipv4Lookup(hostname, options, callback) {
+  if (typeof options === "function") {
+    callback = options;
+    options = {};
+  }
+  return dns.lookup(hostname, { ...options, family: 4, all: false }, callback);
+}
 
 /**
  * Returns SMTP configuration strictly from environment variables.
  */
 function getActiveSmtpConfig() {
-  const host = process.env.SMTP_HOST || "smtp.gmail.com";
-  const port = Number(process.env.SMTP_PORT) || 587;
+  const host = (process.env.SMTP_HOST || "smtp.gmail.com").trim();
+  const rawPort = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : 587;
+  const port = isNaN(rawPort) || rawPort <= 0 ? 587 : rawPort;
+
+  const secureRaw = process.env.SMTP_SECURE;
   const secure =
-    String(process.env.SMTP_SECURE).toLowerCase() === "true" || port === 465;
-  const user = process.env.SMTP_USER || process.env.EMAIL_USER || "";
-  const pass = process.env.SMTP_PASS || process.env.EMAIL_PASS || "";
-  const from_email =
-    process.env.SMTP_FROM_EMAIL || process.env.EMAIL_USER || user || "noreply@sfccafe.com";
-  const from_name = process.env.SMTP_FROM_NAME || "SFC Cafe";
+    secureRaw !== undefined
+      ? String(secureRaw).toLowerCase() === "true"
+      : port === 465;
+
+  const user = (process.env.SMTP_USER || process.env.EMAIL_USER || "").trim();
+  const pass = (process.env.SMTP_PASS || process.env.EMAIL_PASS || "").trim();
+  const from_email = (
+    process.env.SMTP_FROM_EMAIL ||
+    process.env.EMAIL_USER ||
+    user ||
+    "noreply@sfccafe.com"
+  ).trim();
+  const from_name = (process.env.SMTP_FROM_NAME || "SFC Cafe").trim();
 
   return {
     host,
@@ -27,41 +55,49 @@ function getActiveSmtpConfig() {
 }
 
 /**
- * Creates a Nodemailer transport directly using SMTP host and credentials.
- * Note: Never uses `service: "gmail"`; connects directly to the specified host.
+ * Creates a Nodemailer transport strictly bound to IPv4.
  */
-function createTransporter(config = null) {
+function createTransporter(config = null, overrideOptions = {}) {
   const activeConfig = config || getActiveSmtpConfig();
+
+  const port = overrideOptions.port !== undefined ? overrideOptions.port : Number(activeConfig.port);
+  const secure = overrideOptions.secure !== undefined ? overrideOptions.secure : Boolean(activeConfig.secure);
 
   const transportOptions = {
     host: activeConfig.host,
-    port: Number(activeConfig.port),
-    secure: Boolean(activeConfig.secure),
+    port,
+    secure,
     auth: {
       user: activeConfig.user,
       pass: activeConfig.pass,
     },
+    // Force IPv4 and custom lookup to prevent ENETUNREACH on Render/Cloud
+    family: 4,
+    lookup: ipv4Lookup,
     tls: {
       rejectUnauthorized: false,
+      servername: activeConfig.host,
     },
+    // Timeouts to prevent requests hanging indefinitely
+    connectionTimeout: 10000, // 10s
+    greetingTimeout: 10000,   // 10s
+    socketTimeout: 15000,     // 15s
   };
 
   return nodemailer.createTransport(transportOptions);
 }
 
 /**
- * Send an email using .env SMTP configuration.
+ * Send an email with automatic IPv4 fallback (tries port 587, then 465 if needed).
  */
 async function sendMail({ to, subject, text, html, customConfig = null }) {
   const config = customConfig || getActiveSmtpConfig();
 
   if (!config.user || !config.pass) {
     throw new Error(
-      "SMTP credentials (SMTP_USER and SMTP_PASS) are not configured in .env."
+      "SMTP credentials (SMTP_USER and SMTP_PASS) are not configured in environment variables."
     );
   }
-
-  const transporter = createTransporter(config);
 
   const fromAddress = config.from_name
     ? `"${config.from_name}" <${config.from_email || config.user}>`
@@ -82,21 +118,56 @@ async function sendMail({ to, subject, text, html, customConfig = null }) {
         : ""),
   };
 
-  return await transporter.sendMail(mailOptions);
+  // 1. First attempt with primary config
+  try {
+    const transporter = createTransporter(config);
+    return await transporter.sendMail(mailOptions);
+  } catch (primaryError) {
+    const isNetworkError =
+      primaryError.code === "ETIMEDOUT" ||
+      primaryError.code === "ESOCKET" ||
+      primaryError.code === "ECONNREFUSED" ||
+      primaryError.code === "ENETUNREACH" ||
+      primaryError.command === "CONN";
+
+    // 2. If network timeout / unreachable and using standard Gmail/SMTP port, try alternate port (587 <-> 465)
+    if (isNetworkError) {
+      const fallbackPort = Number(config.port) === 465 ? 587 : 465;
+      const fallbackSecure = fallbackPort === 465;
+
+      console.warn(
+        `[SMTP] Primary attempt on ${config.host}:${config.port} failed (${primaryError.code || primaryError.message}). Attempting fallback on port ${fallbackPort} (IPv4)...`
+      );
+
+      try {
+        const fallbackTransporter = createTransporter(config, {
+          port: fallbackPort,
+          secure: fallbackSecure,
+        });
+        const result = await fallbackTransporter.sendMail(mailOptions);
+        console.log(`[SMTP] Fallback on port ${fallbackPort} succeeded.`);
+        return result;
+      } catch (fallbackError) {
+        console.error("[SMTP] Fallback attempt also failed:", fallbackError.message);
+        throw primaryError; // Rethrow original error with context
+      }
+    }
+
+    throw primaryError;
+  }
 }
 
 /**
- * Verify SMTP connection using .env configuration or custom config.
+ * Verify SMTP connection using .env configuration.
  */
 async function testSmtpConnection({ to, customConfig = null } = {}) {
   const config = customConfig || getActiveSmtpConfig();
 
   if (!config.user || !config.pass) {
-    throw new Error("SMTP username and password are required in .env.");
+    throw new Error("SMTP username and password are required in environment variables.");
   }
 
   const transporter = createTransporter(config);
-
   await transporter.verify();
 
   if (to) {

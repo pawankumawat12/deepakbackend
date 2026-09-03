@@ -80,21 +80,11 @@ const ensurePendingEmailColumns = async () => {
 ensurePendingEmailColumns();
 
 const sendOtp = async ({ email, otp }) => {
-  // If email sending is disabled, skip SMTP but return a placeholder result.
-  // The OTP has already been generated and stored in the DB by the caller.
-  const emailActive = (process.env.EMAIL_ACTIVE || "true").toLowerCase() !== "false";
-  if (!emailActive) {
-    console.log(`[EMAIL_ACTIVE=false] OTP for ${email}: ${otp} (email skipped)`);
-    return { messageId: "email-disabled" };
-  }
-
-  try {
-    const { sendMail } = require("../services/smtp.service");
-    const result = await sendMail({
-      to: email,
-      subject: "Your OTP Verification Code - SFC Cafe",
-      text: `Your OTP is ${otp}. This OTP is valid for 5 minutes.`,
-      html: `
+  const emailActive =
+    (process.env.EMAIL_ACTIVE || "true").toLowerCase() !== "false";
+  const subject = "Your OTP Verification Code - SFC Cafe";
+  const text = `Your OTP is ${otp}. This OTP is valid for 5 minutes.`;
+  const html = `
         <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 12px;">
           <h2 style="color: #4f7d16; margin-top: 0;">SFC Cafe Verification</h2>
           <p style="font-size: 14px; color: #555;">Use the following One-Time Password (OTP) to complete your verification:</p>
@@ -103,7 +93,34 @@ const sendOtp = async ({ email, otp }) => {
           </div>
           <p style="font-size: 12px; color: #888;">This OTP is valid for 5 minutes. If you did not request this code, please ignore this email.</p>
         </div>
-      `,
+      `;
+
+  if (!emailActive) {
+    console.log(
+      `[EMAIL_ACTIVE=false] OTP for ${email}: ${otp} (email skipped)`
+    );
+    try {
+      const EmailLogModel = require("./emailLog.model");
+      await EmailLogModel.createEmailLog({
+        recipient: email,
+        subject,
+        email_type: "otp",
+        status: "disabled",
+        body_html: html,
+        body_text: text,
+      });
+    } catch { }
+    return { messageId: "email-disabled" };
+  }
+
+  try {
+    const { sendMail } = require("../services/smtp.service");
+    const result = await sendMail({
+      to: email,
+      subject,
+      text,
+      html,
+      emailType: "otp",
     });
     return result;
   } catch (error) {
@@ -113,19 +130,11 @@ const sendOtp = async ({ email, otp }) => {
 };
 
 const sendEmailChangeOtp = async ({ email, otp }) => {
-  const emailActive = (process.env.EMAIL_ACTIVE || "true").toLowerCase() !== "false";
-  if (!emailActive) {
-    console.log(`[EMAIL_ACTIVE=false] Email change OTP for ${email}: ${otp} (email skipped)`);
-    return { messageId: "email-disabled" };
-  }
-
-  try {
-    const { sendMail } = require("../services/smtp.service");
-    const result = await sendMail({
-      to: email,
-      subject: "Verify your new email address - SFC Cafe",
-      text: `Your OTP for changing your SFC Cafe account email is ${otp}. This code is valid for 10 minutes.`,
-      html: `
+  const emailActive =
+    (process.env.EMAIL_ACTIVE || "true").toLowerCase() !== "false";
+  const subject = "Verify your new email address - SFC Cafe";
+  const text = `Your OTP for changing your SFC Cafe account email is ${otp}. This code is valid for 10 minutes.`;
+  const html = `
         <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 16px; background: #ffffff;">
           <div style="text-align: center; margin-bottom: 20px;">
             <h2 style="color: #4f7d16; margin: 0; font-size: 22px;">SFC Cafe</h2>
@@ -146,7 +155,34 @@ const sendEmailChangeOtp = async ({ email, otp }) => {
             Secure Food Cafe (SFC Cafe) • Fast & Fresh Delivery
           </p>
         </div>
-      `,
+      `;
+
+  if (!emailActive) {
+    console.log(
+      `[EMAIL_ACTIVE=false] Email change OTP for ${email}: ${otp} (email skipped)`
+    );
+    try {
+      const EmailLogModel = require("./emailLog.model");
+      await EmailLogModel.createEmailLog({
+        recipient: email,
+        subject,
+        email_type: "email_change_otp",
+        status: "disabled",
+        body_html: html,
+        body_text: text,
+      });
+    } catch { }
+    return { messageId: "email-disabled" };
+  }
+
+  try {
+    const { sendMail } = require("../services/smtp.service");
+    const result = await sendMail({
+      to: email,
+      subject,
+      text,
+      html,
+      emailType: "email_change_otp",
     });
     return result;
   } catch (error) {
@@ -156,19 +192,11 @@ const sendEmailChangeOtp = async ({ email, otp }) => {
 };
 
 const sendPasswordResetEmail = async ({ email, resetUrl }) => {
-  const emailActive = (process.env.EMAIL_ACTIVE || "true").toLowerCase() !== "false";
-  if (!emailActive) {
-    console.log(`[EMAIL_ACTIVE=false] Password reset for ${email}: ${resetUrl} (email skipped)`);
-    return { messageId: "email-disabled" };
-  }
-
-  try {
-    const { sendMail } = require("../services/smtp.service");
-    return await sendMail({
-      to: email,
-      subject: "Reset your SFC Cafe password",
-      text: `We received a request to reset your password. Use this link within 15 minutes: ${resetUrl}\n\nIf you did not request this, you can safely ignore this email.`,
-      html: `
+  const emailActive =
+    (process.env.EMAIL_ACTIVE || "true").toLowerCase() !== "false";
+  const subject = "Reset your SFC Cafe password";
+  const text = `We received a request to reset your password. Use this link within 15 minutes: ${resetUrl}\n\nIf you did not request this, you can safely ignore this email.`;
+  const html = `
         <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 12px;">
           <h2 style="color: #4f7d16; margin-top: 0;">Password Reset Request</h2>
           <p style="font-size: 14px; color: #555;">We received a request to reset your SFC Cafe password.</p>
@@ -179,7 +207,34 @@ const sendPasswordResetEmail = async ({ email, resetUrl }) => {
           </p>
           <p style="font-size: 12px; color: #888;">This link expires in 15 minutes. If you did not request a password reset, you can safely ignore this email.</p>
         </div>
-      `,
+      `;
+
+  if (!emailActive) {
+    console.log(
+      `[EMAIL_ACTIVE=false] Password reset for ${email}: ${resetUrl} (email skipped)`
+    );
+    try {
+      const EmailLogModel = require("./emailLog.model");
+      await EmailLogModel.createEmailLog({
+        recipient: email,
+        subject,
+        email_type: "password_reset",
+        status: "disabled",
+        body_html: html,
+        body_text: text,
+      });
+    } catch { }
+    return { messageId: "email-disabled" };
+  }
+
+  try {
+    const { sendMail } = require("../services/smtp.service");
+    return await sendMail({
+      to: email,
+      subject,
+      text,
+      html,
+      emailType: "password_reset",
     });
   } catch (error) {
     console.error("Dynamic SMTP password reset error:", error);
@@ -187,7 +242,12 @@ const sendPasswordResetEmail = async ({ email, resetUrl }) => {
   }
 };
 
-async function listCustomers({ page = 1, limit = 10, search = "", status = "" } = {}) {
+async function listCustomers({
+  page = 1,
+  limit = 10,
+  search = "",
+  status = "",
+} = {}) {
   const p = Math.max(1, Number(page) || 1);
   const l = Math.max(1, Math.min(100, Number(limit) || 10));
   const offset = (p - 1) * l;
@@ -205,7 +265,10 @@ async function listCustomers({ page = 1, limit = 10, search = "", status = "" } 
   }
 
   if (status === "active") {
-    baseQuery = baseQuery.where({ "users.is_active": true, "users.is_blocked": false });
+    baseQuery = baseQuery.where({
+      "users.is_active": true,
+      "users.is_blocked": false,
+    });
   } else if (status === "blocked") {
     baseQuery = baseQuery.where({ "users.is_blocked": true });
   }
@@ -269,7 +332,11 @@ function createBlockedCustomerRequest(data) {
     .then((rows) => rows[0]);
 }
 
-async function listBlockedCustomerRequests({ page = 1, limit = 10, status } = {}) {
+async function listBlockedCustomerRequests({
+  page = 1,
+  limit = 10,
+  status,
+} = {}) {
   const p = Math.max(1, Number(page) || 1);
   const l = Math.max(1, Math.min(100, Number(limit) || 10));
   const offset = (p - 1) * l;

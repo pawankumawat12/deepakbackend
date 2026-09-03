@@ -89,9 +89,38 @@ async function createTransporter(config = null) {
 }
 
 /**
- * Send an email using environment-driven SMTP over IPv4 (port 587 / secure: false).
+ * Auto-infer email type based on subject or content if not explicitly provided
  */
-async function sendMail({ to, subject, text, html, customConfig = null }) {
+function inferEmailType(subject, html, text, explicitType) {
+  if (explicitType) return explicitType;
+  const combined = `${subject || ""} ${text || ""} ${html || ""}`.toLowerCase();
+  if (combined.includes("change") && combined.includes("otp")) return "email_change_otp";
+  if (combined.includes("reset") || combined.includes("password")) return "password_reset";
+  if (
+    combined.includes("otp") ||
+    combined.includes("one-time password") ||
+    combined.includes("verification code") ||
+    combined.includes("verification")
+  ) {
+    return "otp";
+  }
+  if (combined.includes("test")) return "test_smtp";
+  return "general";
+}
+
+/**
+ * Send an email using environment-driven SMTP over IPv4 with centralized logging.
+ */
+async function sendMail({
+  to,
+  subject,
+  text,
+  html,
+  customConfig = null,
+  emailType = null,
+  userId = null,
+  metadata = null,
+}) {
   const config = customConfig || getActiveSmtpConfig();
 
   if (!config.user || !config.pass) {
@@ -106,22 +135,64 @@ async function sendMail({ to, subject, text, html, customConfig = null }) {
     ? `"${config.from_name}" <${config.from_email || config.user}>`
     : config.from_email || config.user;
 
+  const resolvedHtml =
+    html ||
+    (text
+      ? `<p style="font-family: sans-serif; font-size: 14px; color: #333;">${text.replace(
+          /\n/g,
+          "<br/>"
+        )}</p>`
+      : "");
+
   const mailOptions = {
     from: fromAddress,
     to,
     subject,
     text,
-    html:
-      html ||
-      (text
-        ? `<p style="font-family: sans-serif; font-size: 14px; color: #333;">${text.replace(
-            /\n/g,
-            "<br/>"
-          )}</p>`
-        : ""),
+    html: resolvedHtml,
   };
 
-  return await transporter.sendMail(mailOptions);
+  const resolvedEmailType = inferEmailType(
+    subject,
+    resolvedHtml,
+    text,
+    emailType
+  );
+
+  let sendResult = null;
+  let sendError = null;
+
+  try {
+    sendResult = await transporter.sendMail(mailOptions);
+  } catch (err) {
+    sendError = err;
+  }
+
+  // Centralized logging: persist exact email content safely
+  try {
+    const EmailLogModel = require("../models/emailLog.model");
+    await EmailLogModel.createEmailLog({
+      recipient: to,
+      sender: fromAddress,
+      subject,
+      email_type: resolvedEmailType,
+      status: sendError ? "failed" : "sent",
+      body_html: resolvedHtml,
+      body_text: text || null,
+      error_message: sendError ? sendError.message : null,
+      message_id: sendResult ? sendResult.messageId : null,
+      user_id: userId,
+      metadata,
+    });
+  } catch (logErr) {
+    console.warn("[SMTP Logger] Non-blocking log error:", logErr.message);
+  }
+
+  if (sendError) {
+    throw sendError;
+  }
+
+  return sendResult;
 }
 
 
@@ -142,12 +213,9 @@ async function testSmtpConnection({ to, customConfig = null } = {}) {
       ? `"${config.from_name}" <${config.from_email || config.user}>`
       : config.from_email || config.user;
 
-    const testResult = await transporter.sendMail({
-      from: fromAddress,postgresql:
-      to,
-      subject: "SFC Cafe - SMTP Test Email Successful!",
-      text: `Hello,\n\nThis is a test email sent from SFC Cafe using environment SMTP settings.\n\nSMTP Host: ${config.host}\nSMTP Port: ${config.port}\nEncryption: ${config.secure ? "SSL/TLS" : "STARTTLS (Port 587)"}\nSender: ${config.from_name} <${config.from_email || config.user}>\n\nYour SMTP server is configured and working perfectly!\n\nBest regards,\nSFC Cafe Team`,
-      html: `
+    const testSubject = "SFC Cafe - SMTP Test Email Successful!";
+    const testText = `Hello,\n\nThis is a test email sent from SFC Cafe using environment SMTP settings.\n\nSMTP Host: ${config.host}\nSMTP Port: ${config.port}\nEncryption: ${config.secure ? "SSL/TLS" : "STARTTLS (Port 587)"}\nSender: ${config.from_name} <${config.from_email || config.user}>\n\nYour SMTP server is configured and working perfectly!\n\nBest regards,\nSFC Cafe Team`;
+    const testHtml = `
         <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 16px; background-color: #ffffff;">
           <div style="text-align: center; margin-bottom: 20px;">
             <div style="display: inline-block; padding: 10px 16px; background-color: #dcfce7; color: #166534; font-weight: 800; border-radius: 12px; font-size: 16px;">
@@ -180,8 +248,31 @@ async function testSmtpConnection({ to, customConfig = null } = {}) {
             Sent automatically via SFC Cafe · ${new Date().toLocaleString("en-IN")}
           </p>
         </div>
-      `,
+      `;
+
+    const testResult = await transporter.sendMail({
+      from: fromAddress,
+      to,
+      subject: testSubject,
+      text: testText,
+      html: testHtml,
     });
+
+    try {
+      const EmailLogModel = require("../models/emailLog.model");
+      await EmailLogModel.createEmailLog({
+        recipient: to,
+        sender: fromAddress,
+        subject: testSubject,
+        email_type: "test_smtp",
+        status: "sent",
+        body_html: testHtml,
+        body_text: testText,
+        message_id: testResult.messageId,
+      });
+    } catch (logErr) {
+      console.warn("[SMTP Logger] Test email log error:", logErr.message);
+    }
 
     return {
       success: true,

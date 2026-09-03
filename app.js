@@ -15,6 +15,7 @@ const reviewRoutes = require("./src/modules/reviews/review.routes");
 const offerRoutes = require("./src/modules/offer/offer.routes");
 const contactRoutes = require("./src/modules/contact/contact.routes");
 const dashboardRoutes = require("./src/modules/dashboard/dashboard.routes");
+const emailLogRoutes = require("./src/modules/emailLogs/emailLog.routes");
 const cookieParser = require("cookie-parser");
 
 const app = express();
@@ -95,6 +96,7 @@ app.use("/api/v1/reviews", reviewRoutes);
 app.use("/api/v1/offers", offerRoutes);
 app.use("/api/v1/contact", contactRoutes);
 app.use("/api/v1/dashboard", dashboardRoutes);
+app.use("/api/v1/email-logs", emailLogRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

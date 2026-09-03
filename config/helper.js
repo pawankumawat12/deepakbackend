@@ -8,7 +8,7 @@ const generateAccessToken = (user) => {
     },
     process.env.ACCESS_TOKEN_SECRET,
     {
-      expiresIn: "30m",
+      expiresIn: "15m",
     }
   );
 };
@@ -25,4 +25,31 @@ const generateRefreshToken = (user) => {
   );
 };
 
-module.exports = {generateAccessToken, generateRefreshToken}
+const getRefreshTokenCookieOptions = () => {
+  const isProduction = process.env.NODE_ENV === "production";
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "lax",
+    path: "/",
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+  };
+};
+
+const getCookieClearOptions = () => {
+  const isProduction = process.env.NODE_ENV === "production";
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "lax",
+    path: "/",
+  };
+};
+
+module.exports = {
+  generateAccessToken,
+  generateRefreshToken,
+  getRefreshTokenCookieOptions,
+  getCookieClearOptions,
+};
+

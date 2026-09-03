@@ -30,6 +30,8 @@ const { emitToAdmin, emitToUser } = require("../../socket/socket.service");
 const {
   generateAccessToken,
   generateRefreshToken,
+  getRefreshTokenCookieOptions,
+  getCookieClearOptions,
 } = require("../../../config/helper");
 
 const OTP_RESEND_COOLDOWN_MS = 30 * 1000;
@@ -386,20 +388,8 @@ const verifyOtp = async (req, res) => {
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
-    // store into cookie
-    res.cookie("accessToken", accessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      maxAge: 15 * 60 * 1000,
-    });
-
-    res.cookie("refreshToken", refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-    });
+    // Set secure HttpOnly refreshToken cookie
+    res.cookie("refreshToken", refreshToken, getRefreshTokenCookieOptions());
 
     await updateUser(user.id, {
       otp: null,
@@ -411,14 +401,20 @@ const verifyOtp = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Email verified successfully! Welcome to SFC Cafe.",
+      accessToken,
       token: accessToken,
+      refreshToken,
       user: {
         id: user.id,
         name: user.name,
         email: user.email,
+        token: accessToken,
         phone: user.phone,
         role: user.role,
         image: user.image,
+        is_active: user.is_active !== false,
+        is_blocked: Boolean(user.is_blocked),
+        block_reason: user.block_reason || null,
       },
     });
   } catch (error) {
@@ -722,24 +718,17 @@ async function login(req, res) {
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
-    res.cookie("accessToken", accessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      maxAge: 15 * 60 * 1000,
-    });
-    res.cookie("refreshToken", refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-    });
+    // Set secure HttpOnly refreshToken cookie
+    res.cookie("refreshToken", refreshToken, getRefreshTokenCookieOptions());
 
     await updateUser(user.id, { access_token: accessToken });
 
     return res.status(200).json({
       success: true,
       message: "Login successful. Welcome back!",
+      accessToken,
+      token: accessToken,
+      refreshToken,
       user: {
         id: user.id,
         name: user.name,
@@ -789,11 +778,19 @@ async function adminLogin(req, res) {
 
 const refreshAccessToken = async (req, res) => {
   try {
-    const refreshToken = req.cookies.refreshToken;
+    // Accept refresh token from cookie, body, or Authorization header
+    let refreshToken = req.cookies?.refreshToken || req.body?.refreshToken || null;
+    if (!refreshToken) {
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith("Bearer ")) {
+        refreshToken = authHeader.split(" ")[1];
+      }
+    }
 
     if (!refreshToken) {
-      return res.status(404).json({
-        message: "Refresh token not found. Please login again",
+      return res.status(401).json({
+        success: false,
+        message: "Refresh token not found. Please log in again.",
       });
     }
 
@@ -802,23 +799,37 @@ const refreshAccessToken = async (req, res) => {
     const user = await findUserById(decoded.id);
 
     if (!user) {
-      return res.status(404).json({
-        message: "User not found",
+      return res.status(401).json({
+        success: false,
+        message: "User not found. Please log in again.",
+      });
+    }
+
+    if (user.is_blocked || user.is_active === false) {
+      return res.status(403).json({
+        success: false,
+        message: user.block_reason || "Your account has been deactivated or blocked.",
       });
     }
 
     const newAccessToken = generateAccessToken(user);
+    const newRefreshToken = generateRefreshToken(user);
 
-    res.cookie("accessToken", newAccessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      maxAge: 15 * 60 * 1000,
-    });
+    // Rotate refresh token cookie
+    res.cookie("refreshToken", newRefreshToken, getRefreshTokenCookieOptions());
+
+    try {
+      await updateUser(user.id, { access_token: newAccessToken });
+    } catch (dbErr) {
+      console.error("Failed to update access token in DB during refresh:", dbErr);
+    }
 
     return res.status(200).json({
+      success: true,
       message: "Access token refreshed",
       accessToken: newAccessToken,
+      token: newAccessToken,
+      refreshToken: newRefreshToken,
       user: {
         id: user.id,
         name: user.name,
@@ -826,13 +837,18 @@ const refreshAccessToken = async (req, res) => {
         phone: user.phone,
         role: user.role,
         image: user.image,
+        token: newAccessToken,
+        is_active: user.is_active !== false,
+        is_blocked: Boolean(user.is_blocked),
+        block_reason: user.block_reason || null,
       },
     });
   } catch (error) {
-    console.error("Refresh token error:", error);
+    console.error("Refresh token error:", error.message);
 
-    return res.status(404).json({
-      message: "Invalid or expired refresh token",
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired refresh token. Please log in again.",
     });
   }
 };
@@ -861,16 +877,25 @@ const getMe = async (req, res) => {
   }
 };
 
-const logout = (req, res) => {
-  const cookieOptions = {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-  };
+const logout = async (req, res) => {
+  const clearOptions = getCookieClearOptions();
 
-  res.clearCookie("accessToken", cookieOptions);
-  res.clearCookie("refreshToken", cookieOptions);
-  return res.status(200).json({ message: "Logged out successfully" });
+  res.clearCookie("accessToken", clearOptions);
+  res.clearCookie("refreshToken", clearOptions);
+
+  try {
+    const userId = req.user?.id;
+    if (userId) {
+      await updateUser(userId, { access_token: null });
+    }
+  } catch (err) {
+    // Ignore DB cleanup error during logout
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: "Logged out successfully",
+  });
 };
 
 const requestEmailChange = async (req, res) => {
@@ -1144,22 +1169,8 @@ const verifyEmailChange = async (req, res) => {
     const accessToken = generateAccessToken(updatedUser);
     const refreshToken = generateRefreshToken(updatedUser);
 
-    const isProduction = process.env.NODE_ENV === "production";
-    const cookieOptions = {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: "strict",
-    };
-
-    res.cookie("accessToken", accessToken, {
-      ...cookieOptions,
-      maxAge: 15 * 60 * 1000,
-    });
-
-    res.cookie("refreshToken", refreshToken, {
-      ...cookieOptions,
-      maxAge: 30 * 24 * 60 * 1000,
-    });
+    // Set secure HttpOnly refreshToken cookie
+    res.cookie("refreshToken", refreshToken, getRefreshTokenCookieOptions());
 
     return res.status(200).json({
       success: true,

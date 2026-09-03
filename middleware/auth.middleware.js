@@ -1,21 +1,23 @@
 const jwt = require("jsonwebtoken");
 const db = require("../config/db");
 
-// Verify access token from cookie or Authorization header
+// Verify access token from Authorization header or cookie
 function verifyToken(req, res, next) {
-  // 1. Try cookie first (raw JWT)
-  let accessToken = req.cookies.accessToken || null;
+  // 1. Try Authorization header first (Bearer <token>)
+  let accessToken = null;
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    accessToken = authHeader.split(" ")[1];
+  }
 
-  // 2. Fall back to Authorization header (Bearer <token>)
-  if (!accessToken) {
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      accessToken = authHeader.split(" ")[1];
-    }
+  // 2. Fall back to cookie (raw JWT)
+  if (!accessToken && req.cookies) {
+    accessToken = req.cookies.accessToken || null;
   }
 
   if (!accessToken) {
     return res.status(401).json({
+      success: false,
       message: "Access token not found",
     });
   }
@@ -87,13 +89,12 @@ function isAdmin(req, res, next) {
 }
 
 function optionalToken(req, res, next) {
-  let accessToken = req.cookies.accessToken || null;
-
-  if (!accessToken) {
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      accessToken = authHeader.split(" ")[1];
-    }
+  let accessToken = null;
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    accessToken = authHeader.split(" ")[1];
+  } else if (req.cookies) {
+    accessToken = req.cookies.accessToken || null;
   }
 
   if (!accessToken) {

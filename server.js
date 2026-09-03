@@ -9,6 +9,7 @@ if (dns.setDefaultResultOrder) {
 const http = require("http");
 const app = require("./app");
 const db = require("./config/db");
+const seedAdmin = require("./config/seedAdmin");
 const { initSocket } = require("./src/socket/socket.service");
 
 const PORT = process.env.PORT || 5000;
@@ -23,6 +24,9 @@ async function startServer() {
       console.log(`Migrations executed (Batch ${batchNo}):`);
       log.forEach((migration) => console.log(`  - ${migration}`));
     }
+
+    // Seed default admin user after successful DB connection & migrations
+    await seedAdmin();
   } catch (err) {
     console.error("Database migration error on startup:", err.message);
   }

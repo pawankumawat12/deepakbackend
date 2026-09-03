@@ -51,6 +51,7 @@ const getRefreshTokenCookieOptions = (req) => {
     httpOnly: true,
     secure: secure,
     sameSite: secure ? "none" : "lax",
+    partitioned: secure,
     path: "/",
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
   };
@@ -62,6 +63,7 @@ const getCookieClearOptions = (req) => {
     httpOnly: true,
     secure: secure,
     sameSite: secure ? "none" : "lax",
+    partitioned: secure,
     path: "/",
   };
 };

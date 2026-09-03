@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const db = require("../config/db");
+const { ACCESS_SECRET } = require("../config/helper");
 
 // Verify access token from Authorization header or cookie
 function verifyToken(req, res, next) {
@@ -24,7 +25,7 @@ function verifyToken(req, res, next) {
 
   jwt.verify(
     accessToken,
-    process.env.ACCESS_TOKEN_SECRET,
+    ACCESS_SECRET,
     async (err, decoded) => {
       if (err) {
         return res.status(401).json({
@@ -103,7 +104,7 @@ function optionalToken(req, res, next) {
 
   jwt.verify(
     accessToken,
-    process.env.ACCESS_TOKEN_SECRET,
+    ACCESS_SECRET,
     (err, decoded) => {
       if (!err && decoded) {
         req.user = decoded;

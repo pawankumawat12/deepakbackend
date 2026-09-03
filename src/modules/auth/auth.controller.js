@@ -28,6 +28,8 @@ const {
 const notificationModel = require("../../models/notification.model");
 const { emitToAdmin, emitToUser } = require("../../socket/socket.service");
 const {
+  ACCESS_SECRET,
+  REFRESH_SECRET,
   generateAccessToken,
   generateRefreshToken,
   getRefreshTokenCookieOptions,
@@ -389,7 +391,7 @@ const verifyOtp = async (req, res) => {
     const refreshToken = generateRefreshToken(user);
 
     // Set secure HttpOnly refreshToken cookie
-    res.cookie("refreshToken", refreshToken, getRefreshTokenCookieOptions());
+    res.cookie("refreshToken", refreshToken, getRefreshTokenCookieOptions(req));
 
     await updateUser(user.id, {
       otp: null,
@@ -403,7 +405,6 @@ const verifyOtp = async (req, res) => {
       message: "Email verified successfully! Welcome to SFC Cafe.",
       accessToken,
       token: accessToken,
-      refreshToken,
       user: {
         id: user.id,
         name: user.name,
@@ -719,7 +720,7 @@ async function login(req, res) {
     const refreshToken = generateRefreshToken(user);
 
     // Set secure HttpOnly refreshToken cookie
-    res.cookie("refreshToken", refreshToken, getRefreshTokenCookieOptions());
+    res.cookie("refreshToken", refreshToken, getRefreshTokenCookieOptions(req));
 
     await updateUser(user.id, { access_token: accessToken });
 
@@ -728,7 +729,6 @@ async function login(req, res) {
       message: "Login successful. Welcome back!",
       accessToken,
       token: accessToken,
-      refreshToken,
       user: {
         id: user.id,
         name: user.name,
@@ -778,8 +778,12 @@ async function adminLogin(req, res) {
 
 const refreshAccessToken = async (req, res) => {
   try {
-    // Accept refresh token from cookie, body, or Authorization header
-    let refreshToken = req.cookies?.refreshToken || req.body?.refreshToken || null;
+    // Accept refresh token from cookie, body, x-refresh-token header, or Authorization header
+    let refreshToken =
+      req.cookies?.refreshToken ||
+      req.body?.refreshToken ||
+      req.headers?.["x-refresh-token"] ||
+      null;
     if (!refreshToken) {
       const authHeader = req.headers.authorization;
       if (authHeader && authHeader.startsWith("Bearer ")) {
@@ -794,7 +798,7 @@ const refreshAccessToken = async (req, res) => {
       });
     }
 
-    const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
+    const decoded = jwt.verify(refreshToken, REFRESH_SECRET);
 
     const user = await findUserById(decoded.id);
 
@@ -816,7 +820,7 @@ const refreshAccessToken = async (req, res) => {
     const newRefreshToken = generateRefreshToken(user);
 
     // Rotate refresh token cookie
-    res.cookie("refreshToken", newRefreshToken, getRefreshTokenCookieOptions());
+    res.cookie("refreshToken", newRefreshToken, getRefreshTokenCookieOptions(req));
 
     try {
       await updateUser(user.id, { access_token: newAccessToken });
@@ -829,7 +833,6 @@ const refreshAccessToken = async (req, res) => {
       message: "Access token refreshed",
       accessToken: newAccessToken,
       token: newAccessToken,
-      refreshToken: newRefreshToken,
       user: {
         id: user.id,
         name: user.name,
@@ -878,7 +881,7 @@ const getMe = async (req, res) => {
 };
 
 const logout = async (req, res) => {
-  const clearOptions = getCookieClearOptions();
+  const clearOptions = getCookieClearOptions(req);
 
   res.clearCookie("accessToken", clearOptions);
   res.clearCookie("refreshToken", clearOptions);
@@ -1170,7 +1173,7 @@ const verifyEmailChange = async (req, res) => {
     const refreshToken = generateRefreshToken(updatedUser);
 
     // Set secure HttpOnly refreshToken cookie
-    res.cookie("refreshToken", refreshToken, getRefreshTokenCookieOptions());
+    res.cookie("refreshToken", refreshToken, getRefreshTokenCookieOptions(req));
 
     return res.status(200).json({
       success: true,

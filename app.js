@@ -19,6 +19,9 @@ const cookieParser = require("cookie-parser");
 
 const app = express();
 
+// Trust reverse proxy (Render, AWS, Heroku, Nginx) so HTTPS and client IP are detected properly
+app.set("trust proxy", 1);
+
 // Security Headers Middleware
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -31,7 +34,7 @@ app.use((req, res, next) => {
   next();
 });
 
-const allowedOrigins = [
+const rawOrigins = [
   "http://localhost:3000",
   "http://localhost:5173",
   "http://127.0.0.1:3000",
@@ -41,17 +44,27 @@ const allowedOrigins = [
   ...(process.env.BFF ? process.env.BFF.split(",").map((s) => s.trim()) : []),
 ].filter(Boolean);
 
+const allowedOrigins = rawOrigins.map((o) => o.replace(/\/+$/, ""));
+
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, server-to-server) or matching allowed list
-      if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== "production") {
-        callback(null, true);
-      } else {
-        callback(null, true);
+      // Allow requests with no origin (like mobile apps, curl, server-to-server)
+      if (!origin) return callback(null, true);
+      const normalizedOrigin = origin.replace(/\/+$/, "");
+      if (
+        allowedOrigins.includes(normalizedOrigin) ||
+        normalizedOrigin.endsWith(".vercel.app") ||
+        process.env.NODE_ENV !== "production"
+      ) {
+        return callback(null, true);
       }
+      return callback(null, true);
     },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-refresh-token"],
+    exposedHeaders: ["Set-Cookie"],
   })
 );
 

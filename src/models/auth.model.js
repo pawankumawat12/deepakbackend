@@ -80,6 +80,14 @@ const ensurePendingEmailColumns = async () => {
 ensurePendingEmailColumns();
 
 const sendOtp = async ({ email, otp }) => {
+  // If email sending is disabled, skip SMTP but return a placeholder result.
+  // The OTP has already been generated and stored in the DB by the caller.
+  const emailActive = (process.env.EMAIL_ACTIVE || "true").toLowerCase() !== "false";
+  if (!emailActive) {
+    console.log(`[EMAIL_ACTIVE=false] OTP for ${email}: ${otp} (email skipped)`);
+    return { messageId: "email-disabled" };
+  }
+
   try {
     const { sendMail } = require("../services/smtp.service");
     const result = await sendMail({
@@ -105,6 +113,12 @@ const sendOtp = async ({ email, otp }) => {
 };
 
 const sendEmailChangeOtp = async ({ email, otp }) => {
+  const emailActive = (process.env.EMAIL_ACTIVE || "true").toLowerCase() !== "false";
+  if (!emailActive) {
+    console.log(`[EMAIL_ACTIVE=false] Email change OTP for ${email}: ${otp} (email skipped)`);
+    return { messageId: "email-disabled" };
+  }
+
   try {
     const { sendMail } = require("../services/smtp.service");
     const result = await sendMail({
@@ -142,6 +156,12 @@ const sendEmailChangeOtp = async ({ email, otp }) => {
 };
 
 const sendPasswordResetEmail = async ({ email, resetUrl }) => {
+  const emailActive = (process.env.EMAIL_ACTIVE || "true").toLowerCase() !== "false";
+  if (!emailActive) {
+    console.log(`[EMAIL_ACTIVE=false] Password reset for ${email}: ${resetUrl} (email skipped)`);
+    return { messageId: "email-disabled" };
+  }
+
   try {
     const { sendMail } = require("../services/smtp.service");
     return await sendMail({

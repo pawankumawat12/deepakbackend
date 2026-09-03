@@ -3,7 +3,7 @@ const db = require("../config/db");
 
 // Verify access token from cookie or Authorization header
 function verifyToken(req, res, next) {
-  const authHeader = req.headers.authorization;
+  const authHeader = req.cookies.accessToken || req.headers.authorization;
   const bearerToken =
     authHeader && authHeader.startsWith("Bearer ")
       ? authHeader.split(" ")[1]
@@ -82,7 +82,7 @@ function isAdmin(req, res, next) {
 }
 
 function optionalToken(req, res, next) {
-  const authHeader = req.headers.authorization;
+  const authHeader = req.cookies.accessToken || req.headers.authorization;
   const bearerToken =
     authHeader && authHeader.startsWith("Bearer ")
       ? authHeader.split(" ")[1]

@@ -124,9 +124,7 @@ async function sendMail({ to, subject, text, html, customConfig = null }) {
   return await transporter.sendMail(mailOptions);
 }
 
-/**
- * Verify SMTP connection using .env configuration.
- */
+
 async function testSmtpConnection({ to, customConfig = null } = {}) {
   const config = customConfig || getActiveSmtpConfig();
 
@@ -145,7 +143,7 @@ async function testSmtpConnection({ to, customConfig = null } = {}) {
       : config.from_email || config.user;
 
     const testResult = await transporter.sendMail({
-      from: fromAddress,
+      from: fromAddress,postgresql:
       to,
       subject: "SFC Cafe - SMTP Test Email Successful!",
       text: `Hello,\n\nThis is a test email sent from SFC Cafe using environment SMTP settings.\n\nSMTP Host: ${config.host}\nSMTP Port: ${config.port}\nEncryption: ${config.secure ? "SSL/TLS" : "STARTTLS (Port 587)"}\nSender: ${config.from_name} <${config.from_email || config.user}>\n\nYour SMTP server is configured and working perfectly!\n\nBest regards,\nSFC Cafe Team`,

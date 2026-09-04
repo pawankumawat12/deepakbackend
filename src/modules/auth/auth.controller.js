@@ -294,7 +294,17 @@ const sendOtp = async (req, res) => {
       });
     }
 
-    if (user.is_email_verified) {
+    // Allow resending OTP if user is admin (2FA login), if an OTP was already issued, or if type/role specifies login
+    const requestedRole = req.body?.role || req.query?.role;
+    const requestType = req.body?.type || req.query?.type;
+    const isLoginOtp =
+      user.role === "admin" ||
+      requestedRole === "admin" ||
+      requestType === "login" ||
+      requestType === "admin_login" ||
+      Boolean(user.otp);
+
+    if (user.is_email_verified && !isLoginOtp) {
       return res.status(400).json({
         success: false,
         message: "Your email is already verified. Please sign in.",

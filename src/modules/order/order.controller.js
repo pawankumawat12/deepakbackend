@@ -41,11 +41,20 @@ async function createOrder(req, res) {
       deliveryAddressJson: inputDeliveryJson,
 
       notes = "",
+      special_instructions = "",
 
       paymentMethod = "Cash on Delivery",
 
       offerCode,
     } = req.body || {};
+
+    const finalNotes = (
+      notes ||
+      special_instructions ||
+      req.body?.order_notes ||
+      req.body?.note ||
+      ""
+    ).trim();
 
     // 1. VALIDATE PAYMENT METHOD
     const allowedPaymentMethods = [
@@ -194,7 +203,7 @@ async function createOrder(req, res) {
         paymentDetailsJson:
           null,
 
-        notes,
+        notes: finalNotes,
 
         offerCode:
           offerCode ||
@@ -725,7 +734,7 @@ async function verifyRazorpayPayment(req, res) {
                 paymentDetails
               ),
 
-            status: "Preparing",
+            status: "Pending",
 
             updated_at:
               trx.fn.now(),
@@ -971,8 +980,8 @@ async function acceptOrderController(req, res) {
         userId: updated.user_id,
         role: "customer",
         type: "order_accepted",
-        title: `Order Accepted! 🎉`,
-        message: `Your order #${updated.order_number || updated.id} has been confirmed and is now being prepared in the kitchen.`,
+        title: "Order Accepted",
+        message: `Your order #${updated.order_number || updated.id} has been accepted and is being prepared.`,
         orderId: updated.id,
         dataJson: { orderId: updated.id, status: updated.status, paymentStatus: updated.payment_status },
       });

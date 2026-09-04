@@ -72,6 +72,11 @@ function validateStatusUpdate(body) {
     errors.push("Admin notes cannot exceed 2000 characters");
   }
 
+  const reply = body.admin_reply || body.reply;
+  if (reply !== undefined && typeof reply === "string" && reply.length > 5000) {
+    errors.push("Admin reply cannot exceed 5000 characters");
+  }
+
   return {
     isValid: errors.length === 0,
     errors,

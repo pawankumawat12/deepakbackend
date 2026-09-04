@@ -135,12 +135,12 @@ async function createOrderWithTransaction({
         // Store complete pricing calculation at order time
         pricing_details_json: pricing,
 
-        // Order starts in Preparing for COD.
-        // Online payment can remain Pending until payment verification.
+        // Initial status is Pending (or Pending Payment for unverified online payment).
+        // Only transitions to Preparing when admin accepts the order.
         status:
           paymentMethod === "Online Payment" && paymentStatus !== "Paid"
             ? "Pending Payment"
-            : "Preparing",
+            : "Pending",
 
         // Payment information
         payment_method: paymentMethod,

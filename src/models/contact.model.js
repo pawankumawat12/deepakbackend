@@ -39,9 +39,11 @@ const ContactModel = {
       .select(
         "contact_queries.*",
         "users.name as registered_user_name",
-        "users.email as registered_user_email"
+        "users.email as registered_user_email",
+        "admin_user.name as admin_responder_name"
       )
       .leftJoin("users", "contact_queries.user_id", "users.id")
+      .leftJoin("users as admin_user", "contact_queries.admin_id", "admin_user.id")
       .where("contact_queries.id", id)
       .first();
   },
@@ -79,9 +81,11 @@ const ContactModel = {
       .select(
         "contact_queries.*",
         "users.name as registered_user_name",
-        "users.email as registered_user_email"
+        "users.email as registered_user_email",
+        "admin_user.name as admin_responder_name"
       )
       .leftJoin("users", "contact_queries.user_id", "users.id")
+      .leftJoin("users as admin_user", "contact_queries.admin_id", "admin_user.id")
       .orderBy("contact_queries.created_at", "desc")
       .limit(limitNum)
       .offset(offset);
@@ -102,9 +106,9 @@ const ContactModel = {
   },
 
   /**
-   * Update status and/or admin notes
+   * Update status, admin notes, and admin reply
    */
-  async updateQuery(id, { status, admin_notes }) {
+  async updateQuery(id, { status, admin_notes, admin_reply, replied_at, admin_id }) {
     const updateData = {
       updated_at: new Date(),
     };
@@ -117,8 +121,46 @@ const ContactModel = {
       updateData.admin_notes = admin_notes;
     }
 
+    if (admin_reply !== undefined) {
+      updateData.admin_reply = admin_reply;
+      updateData.replied_at = replied_at || new Date();
+    }
+
+    if (admin_id !== undefined) {
+      updateData.admin_id = admin_id;
+    }
+
     await db("contact_queries").where("id", id).update(updateData);
     return this.getQueryById(id);
+  },
+
+  /**
+   * Get queries submitted by a specific customer (by user_id or email)
+   */
+  async getUserQueries({ userId, email }) {
+    let query = db("contact_queries");
+
+    if (userId && email) {
+      query = query.where((builder) => {
+        builder
+          .where("contact_queries.user_id", userId)
+          .orWhereRaw("LOWER(contact_queries.email) = LOWER(?)", [email]);
+      });
+    } else if (userId) {
+      query = query.where("contact_queries.user_id", userId);
+    } else if (email) {
+      query = query.whereRaw("LOWER(contact_queries.email) = LOWER(?)", [email]);
+    } else {
+      return [];
+    }
+
+    return query
+      .select(
+        "contact_queries.*",
+        "admin_user.name as admin_responder_name"
+      )
+      .leftJoin("users as admin_user", "contact_queries.admin_id", "admin_user.id")
+      .orderBy("contact_queries.created_at", "desc");
   },
 
   /**

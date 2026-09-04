@@ -7,6 +7,7 @@ const {
   getAdminContactStats,
   updateAdminContactQuery,
   deleteAdminContactQuery,
+  getMyContactQueries,
 } = require("./contact.controller");
 const {
   verifyToken,
@@ -39,6 +40,9 @@ function optionalVerifyToken(req, res, next) {
 
 // Public / Customer endpoint to submit query
 router.post("/", optionalVerifyToken, submitContactQuery);
+
+// Customer endpoint to get their own contact query threads
+router.get("/my", verifyToken, getMyContactQueries);
 
 // Admin-only management endpoints
 router.get("/admin/stats", verifyToken, isAdmin, getAdminContactStats);

@@ -1,6 +1,8 @@
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
+const path = require("path");
+const fs = require("fs");
 const db = require("../../../config/db");
 const {
   validateRegister,
@@ -1240,16 +1242,26 @@ const updateProfile = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    const { name, email, phone } = req.body || {};
+    const currentUser = await findUserById(userId);
+    if (!currentUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    let { name, email, phone, remove_image } = req.body || {};
+    if (!name && currentUser.name) {
+      name = currentUser.name;
+    }
+    if (email === undefined && currentUser.email) {
+      email = currentUser.email;
+    }
+    if (phone === undefined && currentUser.phone) {
+      phone = currentUser.phone;
+    }
+
     const { valid, errors } = validateUpdateProfile({ name, email, phone });
 
     if (!valid) {
       return res.status(400).json({ message: "Validation failed", errors });
-    }
-
-    const currentUser = await findUserById(userId);
-    if (!currentUser) {
-      return res.status(404).json({ message: "User not found" });
     }
 
     const trimmedName = name.trim();
@@ -1294,6 +1306,29 @@ const updateProfile = async (req, res) => {
 
     if (req.file) {
       updateData.image = `/uploads/${req.file.filename}`;
+      // Clean up previous image if it was a local upload
+      if (currentUser.image && currentUser.image.startsWith("/uploads/")) {
+        const oldPath = path.join(__dirname, "../../..", currentUser.image);
+        if (fs.existsSync(oldPath)) {
+          try {
+            fs.unlinkSync(oldPath);
+          } catch (e) {
+            console.error("Failed to delete old avatar file:", e);
+          }
+        }
+      }
+    } else if (remove_image === "true" || remove_image === true) {
+      updateData.image = null;
+      if (currentUser.image && currentUser.image.startsWith("/uploads/")) {
+        const oldPath = path.join(__dirname, "../../..", currentUser.image);
+        if (fs.existsSync(oldPath)) {
+          try {
+            fs.unlinkSync(oldPath);
+          } catch (e) {
+            console.error("Failed to delete old avatar file:", e);
+          }
+        }
+      }
     }
 
     const updatedUsers = await updateUser(userId, updateData);

@@ -1,3 +1,4 @@
+
 const db = require("../../config/db");
 
 function parseJsonArray(val) {
@@ -162,8 +163,11 @@ async function createOffer(data) {
   const getQty = Math.max(1, Number(data.get_qty) || 1);
 
   if (offerType === "BOGO") {
-    if (!targetProductIds || targetProductIds.length === 0) {
-      throw new Error("Please select a target product to which the BOGO offer applies.");
+    if (
+      (!targetProductIds || targetProductIds.length === 0) &&
+      (!targetCategoryIds || targetCategoryIds.length === 0)
+    ) {
+      throw new Error("Please select a target product or category to which the BOGO offer applies.");
     }
   }
 
@@ -218,8 +222,15 @@ async function updateOffer(id, data) {
       data.target_product_ids !== undefined
         ? parseJsonArray(data.target_product_ids)
         : current.target_product_ids;
-    if (!effectiveTargetProductIds || effectiveTargetProductIds.length === 0) {
-      throw new Error("Please select a target product to which the BOGO offer applies.");
+    const effectiveTargetCategoryIds =
+      data.target_category_ids !== undefined
+        ? parseJsonArray(data.target_category_ids)
+        : current.target_category_ids;
+    if (
+      (!effectiveTargetProductIds || effectiveTargetProductIds.length === 0) &&
+      (!effectiveTargetCategoryIds || effectiveTargetCategoryIds.length === 0)
+    ) {
+      throw new Error("Please select a target product or category to which the BOGO offer applies.");
     }
   }
 
@@ -296,6 +307,43 @@ function isOfferActiveAndValid(offer, now = new Date()) {
     return { valid: false, reason: "Offer maximum usage limit has been reached." };
   }
   return { valid: true };
+}
+
+/**
+ * Checks if a cart/product item matches an offer by product ID or category ID
+ */
+function isItemMatchingOffer(item, offer) {
+  if (!item || !offer) return false;
+  const productId =
+    item.product_id !== undefined && item.product_id !== null
+      ? String(item.product_id).trim()
+      : item.id !== undefined && item.id !== null
+      ? String(item.id).trim()
+      : null;
+  const categoryId =
+    item.category_id !== undefined && item.category_id !== null
+      ? String(item.category_id).trim()
+      : item.category !== undefined && item.category !== null
+      ? String(item.category).trim()
+      : null;
+
+  const targetProductIds = parseJsonArray(offer.target_product_ids);
+  const targetCategoryIds = parseJsonArray(offer.target_category_ids);
+
+  const matchesProduct =
+    Boolean(productId) &&
+    targetProductIds.some((id) => String(id).trim() === productId);
+
+  const matchesCategory =
+    Boolean(categoryId) &&
+    targetCategoryIds.some((id) => String(id).trim() === categoryId);
+
+  if (targetProductIds.length > 0 || targetCategoryIds.length > 0) {
+    return matchesProduct || matchesCategory;
+  }
+
+  // If neither target product nor category configured, offer applies store-wide
+  return true;
 }
 
 /**
@@ -399,59 +447,129 @@ function calculateOfferDiscount(offer, items = [], rawSubtotal = 0) {
     case "BOGO": {
       const buyQty = Math.max(1, Number(offer.buy_qty) || 1);
       const getQty = Math.max(1, Number(offer.get_qty) || 1);
-      const step = buyQty + getQty;
 
-      const targetIds = new Set(
-        (offer.target_product_ids || []).map((id) => Number(id))
-      );
+      const targetProductIds = parseJsonArray(offer.target_product_ids);
+      const targetCategoryIds = parseJsonArray(offer.target_category_ids);
 
-      if (targetIds.size === 0) {
+      if (targetProductIds.length === 0 && targetCategoryIds.length === 0) {
         return {
           isEligible: false,
           discount: 0,
-          reason: "This BOGO deal does not have an eligible target product configured.",
+          reason: "This BOGO deal does not have an eligible target product or category configured.",
         };
       }
 
-      const matchingItems = items.filter((it) =>
-        targetIds.has(Number(it.product_id || it.id))
-      );
+      const matchingItems = items.filter((it) => isItemMatchingOffer(it, offer));
 
       if (matchingItems.length === 0) {
         return {
           isEligible: false,
           discount: 0,
-          reason: `Your cart does not contain the eligible item for this Buy ${buyQty} Get ${getQty} Free offer.`,
+          reason: `Your cart does not contain eligible items for this Buy ${buyQty} Get ${getQty} Free offer.`,
         };
       }
 
-      const totalTargetQty = matchingItems.reduce(
-        (sum, it) => sum + (Number(it.quantity) || 0),
-        0
-      );
+      // Customer adds ONLY the BUY quantity to cart.
+      // Free quantity is automatically calculated per matching item line.
+      let totalFreeItems = 0;
+      let totalSavings = 0;
+      const bogoItems = [];
+      let minRemainingBuyQtyNeeded = Infinity;
 
-      const freeBatches = Math.floor(totalTargetQty / step);
-      const freeItemsCount = freeBatches * getQty;
+      for (const it of matchingItems) {
+        const itemQty = Number(it.quantity) || 0;
+        const unitPrice = Number(it.price) || 0;
+        const batches = Math.floor(itemQty / buyQty);
 
-      if (freeItemsCount <= 0) {
-        const remainingNeeded = step - (totalTargetQty % step);
+        if (batches >= 1) {
+          let freeQty = batches * getQty;
+          let savings = freeQty * unitPrice;
+
+          if (offer.max_discount_amount != null && offer.max_discount_amount > 0) {
+            if (savings > offer.max_discount_amount) {
+              savings = offer.max_discount_amount;
+              if (unitPrice > 0) {
+                freeQty = Math.max(1, Math.floor(savings / unitPrice));
+              }
+            }
+          }
+
+          totalFreeItems += freeQty;
+          totalSavings += savings;
+
+          bogoItems.push({
+            product_id: Number(it.product_id || it.id),
+            cart_item_id: it.cart_item_id || null,
+            name: it.name,
+            unitPrice,
+            paid_quantity: itemQty,
+            free_quantity: freeQty,
+            total_quantity: itemQty + freeQty,
+            savings,
+            buy_qty: buyQty,
+            get_qty: getQty,
+            applied: true,
+            offer_code: offer.code,
+            offer_id: offer.id,
+          });
+        } else {
+          const needed = buyQty - itemQty;
+          if (needed < minRemainingBuyQtyNeeded) {
+            minRemainingBuyQtyNeeded = needed;
+          }
+          bogoItems.push({
+            product_id: Number(it.product_id || it.id),
+            cart_item_id: it.cart_item_id || null,
+            name: it.name,
+            unitPrice,
+            paid_quantity: itemQty,
+            free_quantity: 0,
+            total_quantity: itemQty,
+            savings: 0,
+            buy_qty: buyQty,
+            get_qty: getQty,
+            applied: false,
+            needed_to_unlock: needed,
+            offer_code: offer.code,
+            offer_id: offer.id,
+          });
+        }
+      }
+
+      if (totalFreeItems <= 0) {
+        const needed = minRemainingBuyQtyNeeded !== Infinity ? minRemainingBuyQtyNeeded : buyQty;
         return {
           isEligible: false,
           discount: 0,
-          reason: `Add ${remainingNeeded} more of the item to your cart to get ${getQty} FREE with promo code ${offer.code}.`,
+          savings: 0,
+          free_items_count: 0,
+          reason: `Add ${needed} more of the eligible item to your cart to get ${getQty} FREE with promo code ${offer.code}.`,
         };
       }
 
-      // Calculate unit price from the matching product item
-      const unitPrice = Number(matchingItems[0].price) || 0;
-      let bogoDiscount = freeItemsCount * unitPrice;
-
-      if (offer.max_discount_amount != null && offer.max_discount_amount > 0) {
-        bogoDiscount = Math.min(bogoDiscount, offer.max_discount_amount);
-      }
-
-      computedDiscount = bogoDiscount;
-      break;
+      // Customer is charged ONLY for the BUY quantity, which is already reflected in subtotal.
+      // Cash discount subtracted from subtotal is 0, while savings reflects the free goods value.
+      return {
+        isEligible: true,
+        discount: 0,
+        savings: Math.round(totalSavings * 100) / 100,
+        free_items_count: totalFreeItems,
+        bogo_items: bogoItems,
+        discountedSubtotal: rawSubtotal,
+        offer: {
+          id: offer.id,
+          code: offer.code,
+          title: offer.title,
+          type: offer.type,
+          badge: offer.badge,
+          discount_value: offer.discount_value,
+          buy_qty: buyQty,
+          get_qty: getQty,
+          free_quantity: totalFreeItems,
+          savings: Math.round(totalSavings * 100) / 100,
+          description: `Buy ${buyQty} Get ${getQty} Free applied! ${totalFreeItems} free item(s) included.`,
+        },
+      };
     }
 
     default: {
@@ -483,15 +601,17 @@ function calculateOfferDiscount(offer, items = [], rawSubtotal = 0) {
 async function findBestAutoApplyOffer(items = [], rawSubtotal = 0) {
   if (rawSubtotal <= 0 || items.length === 0) return null;
 
-  const activeOffers = await listActiveOffersCustomer();
+  const activeOffers = await module.exports.listActiveOffersCustomer();
   const autoOffers = activeOffers.filter((o) => o.auto_apply);
 
   let bestResult = null;
 
   for (const offer of autoOffers) {
     const calc = calculateOfferDiscount(offer, items, rawSubtotal);
-    if (calc.isEligible && calc.discount > 0) {
-      if (!bestResult || calc.discount > bestResult.discount) {
+    if (calc.isEligible && (calc.discount > 0 || calc.savings > 0 || calc.free_items_count > 0)) {
+      const offerValue = Number(calc.discount || calc.savings || 0);
+      const bestValue = bestResult ? Number(bestResult.discount || bestResult.savings || 0) : 0;
+      if (!bestResult || offerValue > bestValue || (offer.priority || 0) > (bestResult.offer?.priority || 0)) {
         bestResult = {
           ...calc,
           offer,
@@ -509,7 +629,7 @@ async function findBestAutoApplyOffer(items = [], rawSubtotal = 0) {
 async function evaluateCartOffer({ offerCode = null, items = [], rawSubtotal = 0 }) {
   if (offerCode && String(offerCode).trim()) {
     const code = String(offerCode).trim().toUpperCase();
-    const offer = await findOfferByCode(code);
+    const offer = await module.exports.findOfferByCode(code);
     if (!offer) {
       return {
         isEligible: false,
@@ -520,15 +640,147 @@ async function evaluateCartOffer({ offerCode = null, items = [], rawSubtotal = 0
     return calculateOfferDiscount(offer, items, rawSubtotal);
   }
 
-  // If no explicit code, try auto-apply
+  // 1. If no explicit code, try best auto-apply offer
   const bestAuto = await findBestAutoApplyOffer(items, rawSubtotal);
   if (bestAuto) {
     return bestAuto;
   }
 
+  // 2. If no auto-apply offer, check if any active BOGO offer applies to products in cart
+  // Active BOGO offers automatically apply when eligible products/categories are in cart
+  if (items.length > 0 && rawSubtotal > 0) {
+    const activeOffers = await module.exports.listActiveOffersCustomer();
+    const bogoOffers = activeOffers.filter((o) => o.type === "BOGO");
+    let bestBogo = null;
+    for (const offer of bogoOffers) {
+      const calc = calculateOfferDiscount(offer, items, rawSubtotal);
+      if (calc.isEligible && (calc.savings > 0 || calc.free_items_count > 0)) {
+        const val = Number(calc.savings || 0);
+        const bestVal = bestBogo ? Number(bestBogo.savings || 0) : 0;
+        if (!bestBogo || val > bestVal || (offer.priority || 0) > (bestBogo.offer?.priority || 0)) {
+          bestBogo = {
+            ...calc,
+            offer,
+          };
+        }
+      }
+    }
+    if (bestBogo) {
+      return bestBogo;
+    }
+  }
+
   return {
     isEligible: false,
     discount: 0,
+  };
+}
+
+/**
+ * Formats an offer for inclusion in product API responses
+ */
+function formatOfferForProduct(offer) {
+  if (!offer) return null;
+  return {
+    id: Number(offer.id),
+    title: offer.title,
+    code: offer.code,
+    description: offer.description ?? null,
+    badge: offer.badge ?? null,
+    type: offer.type,
+    discount_value: Number(offer.discount_value || 0),
+    min_order_amount: Number(offer.min_order_amount || 0),
+    max_discount_amount:
+      offer.max_discount_amount != null
+        ? Number(offer.max_discount_amount)
+        : null,
+    buy_qty: Number(offer.buy_qty || 1),
+    get_qty: Number(offer.get_qty || 1),
+    banner_image: offer.banner_image ?? null,
+    start_date: offer.start_date ?? null,
+    end_date: offer.end_date ?? null,
+    auto_apply: Boolean(offer.auto_apply),
+    priority: Number(offer.priority || 0),
+    target_product_ids: parseJsonArray(offer.target_product_ids),
+    target_category_ids: parseJsonArray(offer.target_category_ids),
+  };
+}
+
+/**
+ * Returns active offers applicable to a product via target_product_ids or target_category_ids.
+ * Product-specific offers (target_product_ids) are given priority over category offers.
+ * If the same offer matches through both product ID and category ID, it is included only once.
+ */
+function getApplicableOffersForProduct(product, activeOffers = []) {
+  if (!product || !Array.isArray(activeOffers)) return [];
+
+  const productId =
+    product.id !== undefined && product.id !== null
+      ? String(product.id).trim()
+      : null;
+  const categoryId =
+    product.category_id !== undefined && product.category_id !== null
+      ? String(product.category_id).trim()
+      : null;
+
+  const seenOfferIds = new Set();
+  const productSpecificOffers = [];
+  const categoryOffers = [];
+
+  for (const offer of activeOffers) {
+    if (!offer || !offer.id || seenOfferIds.has(offer.id)) continue;
+
+    const targetProductIds = parseJsonArray(offer.target_product_ids);
+    const targetCategoryIds = parseJsonArray(offer.target_category_ids);
+
+    const matchesProduct =
+      Boolean(productId) &&
+      targetProductIds.some((id) => String(id).trim() === productId);
+
+    const matchesCategory =
+      Boolean(categoryId) &&
+      targetCategoryIds.some((id) => String(id).trim() === categoryId);
+
+    if (matchesProduct) {
+      seenOfferIds.add(offer.id);
+      productSpecificOffers.push({
+        ...formatOfferForProduct(offer),
+        is_product_specific: true,
+        applied_scope: "PRODUCT",
+      });
+    } else if (matchesCategory) {
+      seenOfferIds.add(offer.id);
+      categoryOffers.push({
+        ...formatOfferForProduct(offer),
+        is_product_specific: false,
+        applied_scope: "CATEGORY",
+      });
+    }
+  }
+
+  // Product-specific offers have priority over category offers
+  return [...productSpecificOffers, ...categoryOffers];
+}
+
+/**
+ * Attaches applicable offers to an array of products
+ */
+function attachOffersToProducts(products, activeOffers = []) {
+  if (!Array.isArray(products)) return [];
+  return products.map((product) => ({
+    ...product,
+    offers: getApplicableOffersForProduct(product, activeOffers),
+  }));
+}
+
+/**
+ * Attaches applicable offers to a single product
+ */
+function attachOffersToProduct(product, activeOffers = []) {
+  if (!product) return null;
+  return {
+    ...product,
+    offers: getApplicableOffersForProduct(product, activeOffers),
   };
 }
 
@@ -545,5 +797,9 @@ module.exports = {
   calculateOfferDiscount,
   findBestAutoApplyOffer,
   evaluateCartOffer,
+  formatOfferForProduct,
+  getApplicableOffersForProduct,
+  attachOffersToProducts,
+  attachOffersToProduct,
+  isItemMatchingOffer,
 };
-

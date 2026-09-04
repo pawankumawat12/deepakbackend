@@ -47,38 +47,39 @@ async function createOrderWithTransaction({
       throw err;
     }
 
-    // 2. VALIDATE PRODUCT AVAILABILITY + STOCK
-    for (const item of rawCartItems) {
-      if (!item.is_active) {
-        const err = new Error(
-          `Item "${item.name}" is currently unavailable. Please remove it from your cart.`
-        );
-
-        err.statusCode = 400;
-        throw err;
-      }
-
-      // MADE_TO_ORDER does not require stock
-      if (
-        item.availability_type !== "MADE_TO_ORDER" &&
-        Number(item.stock) < Number(item.quantity)
-      ) {
-        const err = new Error(
-          `Item "${item.name}" only has ${item.stock} in stock. Please adjust quantity.`
-        );
-
-        err.statusCode = 400;
-        throw err;
-      }
-    }
-
-    // 3. CALCULATE PRICING AGAIN ON BACKEND
+    // 2. CALCULATE PRICING AND BOGO ALLOCATION ON BACKEND
     const pricing = await calculateCartAndOrderPricing({
       items: rawCartItems,
       deliveryAddress: deliveryAddressJson,
       paymentMethod,
       offerCode,
     });
+
+    const enrichedItems = pricing.items || rawCartItems;
+
+    // 3. VALIDATE PRODUCT AVAILABILITY + STOCK (AGAINST TOTAL DELIVERED QUANTITY)
+    for (const item of enrichedItems) {
+      if (!item.is_active) {
+        const err = new Error(
+          `Item "${item.name}" is currently unavailable. Please remove it from your cart.`
+        );
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const requiredStock = item.total_quantity || item.quantity;
+      // MADE_TO_ORDER does not require stock
+      if (
+        item.availability_type !== "MADE_TO_ORDER" &&
+        Number(item.stock) < Number(requiredStock)
+      ) {
+        const err = new Error(
+          `Item "${item.name}" only has ${item.stock} in stock. Cannot fulfill ${requiredStock} item(s) (including free promotional items). Please adjust quantity.`
+        );
+        err.statusCode = 400;
+        throw err;
+      }
+    }
 
     // 4. MINIMUM ORDER VALIDATION
     if (pricing.is_below_minimum_order) {
@@ -158,14 +159,27 @@ async function createOrderWithTransaction({
       })
       .returning("*");
 
-    // 8. CREATE ORDER ITEMS
+    // 8. CREATE ORDER ITEMS WITH BOGO BREAKDOWN
     const orderItemsToInsert = [];
 
-    for (const item of rawCartItems) {
+    for (const item of enrichedItems) {
       const price = Number(item.price) || 0;
-      const quantity = Number(item.quantity) || 1;
+      const paidQuantity =
+        item.paid_quantity != null
+          ? Number(item.paid_quantity)
+          : Number(item.quantity) || 1;
+      const freeQuantity =
+        item.free_quantity != null ? Number(item.free_quantity) : 0;
+      const totalQuantity =
+        item.total_quantity != null
+          ? Number(item.total_quantity)
+          : paidQuantity + freeQuantity;
 
-      const itemTotal = price * quantity;
+      // Customer is charged ONLY for the BUY / paid quantity
+      const itemTotal =
+        item.itemTotal != null
+          ? Number(item.itemTotal)
+          : Math.round(price * paidQuantity * 100) / 100;
 
       const isMadeToOrder =
         item.availability_type === "MADE_TO_ORDER";
@@ -188,14 +202,10 @@ async function createOrderWithTransaction({
           : null;
 
       // STOCK DECREASE
-      // Only finalize stock when order is actually finalized.
-      // Online Payment:
-      // finalizeOrder = false
-      // stock will be decreased after successful payment
-      //
-
+      // Deducts total quantity physically leaving inventory (paid + free)
+      // Only finalize stock when order is actually finalized (e.g. COD or after online payment).
       if (finalizeOrder && !isMadeToOrder) {
-        const quantityToRemove = quantity;
+        const quantityToRemove = totalQuantity;
 
         const updatedRows = await trx("products")
           .where("id", item.product_id)
@@ -207,7 +217,7 @@ async function createOrderWithTransaction({
 
         if (updatedRows === 0) {
           const err = new Error(
-            `Item "${item.name}" is no longer available in the requested quantity.`
+            `Item "${item.name}" is no longer available in the requested quantity (${quantityToRemove} items).`
           );
 
           err.statusCode = 400;
@@ -215,7 +225,7 @@ async function createOrderWithTransaction({
         }
       }
 
-      // ORDER ITEM
+      // ORDER ITEM ROW
       orderItemsToInsert.push({
         order_id: order.id,
 
@@ -225,9 +235,17 @@ async function createOrderWithTransaction({
 
         price,
 
-        quantity,
+        quantity: totalQuantity, // Total items fulfilled / delivered
 
-        total: itemTotal,
+        paid_quantity: paidQuantity, // Items billed to customer
+
+        free_quantity: freeQuantity, // Promotional free items
+
+        bogo_details_json: item.bogo_details
+          ? JSON.stringify(item.bogo_details)
+          : null,
+
+        total: itemTotal, // Charged amount (paid_quantity * price)
 
         availability_type:
           item.availability_type || "IN_STOCK",
@@ -244,6 +262,21 @@ async function createOrderWithTransaction({
         updated_at: trx.fn.now(),
       });
     }
+
+    // Safely check if order_items has paid_quantity column
+    try {
+      const hasPaidQtyCol = await trx.schema.hasColumn(
+        "order_items",
+        "paid_quantity"
+      );
+      if (!hasPaidQtyCol) {
+        for (const row of orderItemsToInsert) {
+          delete row.paid_quantity;
+          delete row.free_quantity;
+          delete row.bogo_details_json;
+        }
+      }
+    } catch {}
 
     // 9. INSERT ORDER ITEMS
     const insertedItems = await trx("order_items")

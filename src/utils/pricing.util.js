@@ -43,41 +43,192 @@ async function calculateCartAndOrderPricing({
   offerCode = null,
 }) {
   const settings = pricingSettings || (await getOrderPricingSettings());
-  const { evaluateCartOffer } = require("../models/offer.model");
+  const {
+    evaluateCartOffer,
+    listActiveOffersCustomer,
+    isItemMatchingOffer,
+  } = require("../models/offer.model");
 
-  // 1. Subtotal
-  let rawSubtotal = 0;
-  let totalQuantity = 0;
-
+  // 1. Initial Subtotal for Offer Evaluation (based on quantity added to cart)
+  let initialRawSubtotal = 0;
   for (const item of items) {
     const price = Number(item.price) || 0;
     const qty = Number(item.quantity) || 1;
-    rawSubtotal += price * qty;
-    totalQuantity += qty;
+    initialRawSubtotal += price * qty;
   }
-  rawSubtotal = Math.round(rawSubtotal * 100) / 100;
+  initialRawSubtotal = Math.round(initialRawSubtotal * 100) / 100;
 
-  // 2. Dynamic Offer / Promo Code & Discount Calculation
+  // 2. Dynamic Offer / Promo Code & BOGO Evaluation
   const offerEvaluation = await evaluateCartOffer({
     offerCode,
     items,
-    rawSubtotal,
+    rawSubtotal: initialRawSubtotal,
   });
 
+  const isBogoOffer = Boolean(
+    offerEvaluation &&
+      offerEvaluation.isEligible &&
+      offerEvaluation.offer?.type === "BOGO"
+  );
+
+  // Support BOGO and any other quantity-based / promotional free item offer
+  const hasFreeItemOffer = Boolean(
+    offerEvaluation &&
+      offerEvaluation.isEligible &&
+      (isBogoOffer ||
+        Array.isArray(offerEvaluation.bogo_items) ||
+        Array.isArray(offerEvaluation.free_items) ||
+        Number(offerEvaluation.free_items_count) > 0)
+  );
+
+  const freeItemsMap = new Map();
+  if (hasFreeItemOffer) {
+    if (Array.isArray(offerEvaluation.bogo_items)) {
+      for (const b of offerEvaluation.bogo_items) {
+        freeItemsMap.set(Number(b.product_id), b);
+      }
+    }
+    if (Array.isArray(offerEvaluation.free_items)) {
+      for (const f of offerEvaluation.free_items) {
+        freeItemsMap.set(Number(f.product_id), f);
+      }
+    }
+  }
+
+  // Load active BOGO offers if no BOGO/free item offer applied yet, for informational progress
+  let activeBogoOffers = [];
+  if (!hasFreeItemOffer) {
+    try {
+      const activeOffers = await listActiveOffersCustomer();
+      activeBogoOffers = activeOffers.filter((o) => o.type === "BOGO");
+    } catch {}
+  }
+
+  // 3. Process Each Item: Separate Paid Quantity vs Free Quantity
+  let rawSubtotal = 0;
+  let totalQuantity = 0;
+  let paidItemsCount = 0;
+  let freeItemsCount = 0;
+  let totalBogoSavings = 0;
+
+  for (const item of items) {
+    const pId = Number(item.product_id || item.id);
+    const unitPrice = Number(item.price) || 0;
+    const cartQty = Number(item.quantity) || 1;
+
+    let paidQty = cartQty;
+    let freeQty = 0;
+    let totalQty = cartQty;
+    let bogoDetails = null;
+
+    if (hasFreeItemOffer && freeItemsMap.has(pId)) {
+      const b = freeItemsMap.get(pId);
+      paidQty = Number(b.paid_quantity != null ? b.paid_quantity : cartQty);
+      freeQty = Number(b.free_quantity || 0);
+      totalQty = Number(b.total_quantity || paidQty + freeQty);
+      const savings = Number(b.savings || freeQty * unitPrice);
+
+      bogoDetails = {
+        applied: Boolean(b.applied !== false),
+        offer_id: b.offer_id || offerEvaluation.offer?.id,
+        offer_code: b.offer_code || offerEvaluation.offer?.code,
+        offer_title: offerEvaluation.offer?.title || "Special Deal",
+        buy_qty: b.buy_qty,
+        get_qty: b.get_qty,
+        paid_quantity: paidQty,
+        free_quantity: freeQty,
+        total_quantity: totalQty,
+        savings,
+      };
+      totalBogoSavings += savings;
+    } else if (!hasFreeItemOffer && activeBogoOffers.length > 0) {
+      // Find if this item matches any active BOGO offer that is not yet unlocked
+      const matchingBogo = activeBogoOffers.find((bo) =>
+        isItemMatchingOffer(item, bo)
+      );
+      if (matchingBogo) {
+        const bQty = Math.max(1, Number(matchingBogo.buy_qty) || 1);
+        const gQty = Math.max(1, Number(matchingBogo.get_qty) || 1);
+        const needed = bQty > cartQty ? bQty - cartQty : 0;
+        bogoDetails = {
+          applied: false,
+          offer_id: matchingBogo.id,
+          offer_code: matchingBogo.code,
+          offer_title: matchingBogo.title,
+          buy_qty: bQty,
+          get_qty: gQty,
+          needed_to_unlock: needed,
+          message: `Add ${needed} more to get ${gQty} FREE with code ${matchingBogo.code}`,
+        };
+      }
+    }
+
+    const itemTotal = Math.round(unitPrice * paidQty * 100) / 100;
+
+    item.paid_quantity = paidQty;
+    item.free_quantity = freeQty;
+    item.total_quantity = totalQty;
+    item.bogo_details = bogoDetails;
+    item.itemTotal = itemTotal;
+
+    rawSubtotal += itemTotal;
+    paidItemsCount += paidQty;
+    freeItemsCount += freeQty;
+    totalQuantity += totalQty;
+  }
+
+  // Account for any non-itemized free products granted by offer evaluation
+  if (
+    offerEvaluation &&
+    offerEvaluation.isEligible &&
+    Number(offerEvaluation.free_items_count) > freeItemsCount
+  ) {
+    const extraFree = Number(offerEvaluation.free_items_count) - freeItemsCount;
+    freeItemsCount += extraFree;
+    totalQuantity += extraFree;
+  }
+
+  rawSubtotal = Math.round(rawSubtotal * 100) / 100;
+  totalBogoSavings = Math.round(totalBogoSavings * 100) / 100;
+
+  // 4. Discount & Applied Offer Snapshot
   let discount = 0;
   let discountPercent = 0;
   let appliedOffer = null;
 
-  if (offerEvaluation && offerEvaluation.isEligible && offerEvaluation.discount > 0) {
-    discount = Math.round(offerEvaluation.discount * 100) / 100;
-    appliedOffer = {
-      id: offerEvaluation.offer?.id || null,
-      code: offerEvaluation.offer?.code || offerCode,
-      title: offerEvaluation.offer?.title || "Special Offer",
-      badge: offerEvaluation.offer?.badge || "PROMO",
-      type: offerEvaluation.offer?.type || "PERCENTAGE",
-      discount: discount,
-    };
+  if (offerEvaluation && offerEvaluation.isEligible) {
+    if (isBogoOffer) {
+      // Customer is charged ONLY for the BUY quantity (paid_quantity * unitPrice).
+      // Free quantity is provided at 0 cost. No extra cash deduction from subtotal.
+      discount = 0;
+      appliedOffer = {
+        id: offerEvaluation.offer?.id || null,
+        code: offerEvaluation.offer?.code || offerCode,
+        title: offerEvaluation.offer?.title || "BOGO Special Offer",
+        badge: offerEvaluation.offer?.badge || "BOGO DEAL",
+        type: "BOGO",
+        buy_qty: offerEvaluation.offer?.buy_qty,
+        get_qty: offerEvaluation.offer?.get_qty,
+        free_quantity: freeItemsCount,
+        savings: totalBogoSavings,
+        discount: 0,
+        description:
+          offerEvaluation.offer?.description ||
+          `Buy ${offerEvaluation.offer?.buy_qty || 1} Get ${
+            offerEvaluation.offer?.get_qty || 1
+          } Free Applied: ${freeItemsCount} Free item(s) included!`,
+      };
+    } else if (offerEvaluation.discount > 0) {
+      discount = Math.round(offerEvaluation.discount * 100) / 100;
+      appliedOffer = {
+        id: offerEvaluation.offer?.id || null,
+        code: offerEvaluation.offer?.code || offerCode,
+        title: offerEvaluation.offer?.title || "Special Offer",
+        badge: offerEvaluation.offer?.badge || "PROMO",
+        type: offerEvaluation.offer?.type || "PERCENTAGE",
+        discount: discount,
+      };
+    }
   } else {
     // Fallback to store global discount setting if set
     discountPercent = Number(settings.discount_percent) || 0;
@@ -91,7 +242,7 @@ async function calculateCartAndOrderPricing({
     Math.round((rawSubtotal - discount) * 100) / 100
   );
 
-  // 3. Minimum Order Check
+  // 5. Minimum Order Check (against subtotal charged to customer)
   const minimumOrderAmount = Number(settings.minimum_order_amount) || 0;
   const isBelowMinimumOrder = rawSubtotal > 0 && rawSubtotal < minimumOrderAmount;
   const minimumOrderShortfall = isBelowMinimumOrder
@@ -196,8 +347,16 @@ async function calculateCartAndOrderPricing({
   const expiresAt = new Date(now.getTime() + validitySeconds * 1000);
 
   return {
+    items,
     subtotal: rawSubtotal,
     total_items: totalQuantity,
+    total_quantity: totalQuantity,
+    total_products_delivered: totalQuantity,
+    normal_cart_quantity: paidItemsCount,
+    cart_quantity: paidItemsCount,
+    paid_items: paidItemsCount,
+    free_items: freeItemsCount,
+    bogo_savings: totalBogoSavings,
     item_types_count: items.length,
 
     // Discount & Applied Offer

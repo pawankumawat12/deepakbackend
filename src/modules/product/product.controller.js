@@ -12,6 +12,11 @@ const {
   deleteProduct,
 } = require("../../models/product.model");
 const {
+  listActiveOffersCustomer,
+  attachOffersToProducts,
+  getApplicableOffersForProduct,
+} = require("../../models/offer.model");
+const {
   validateProductCreate,
   validateProductUpdate,
   validateProductListQuery,
@@ -47,14 +52,20 @@ async function listProducts(req, res) {
       }
     }
 
-    const [products, total] = await Promise.all([
+    const [products, total, activeOffers] = await Promise.all([
       findProducts({ page, limit, offset, ...filters }),
       countProducts(filters),
+      listActiveOffersCustomer().catch((err) => {
+        console.error("Error fetching active offers for listProducts:", err);
+        return [];
+      }),
     ]);
+
+    const productsWithOffers = attachOffersToProducts(products, activeOffers);
 
     return res.status(200).json({
       message: "Products fetched successfully",
-      data: products,
+      data: productsWithOffers,
       pagination: buildPaginationMeta(page, limit, total),
     });
   } catch (error) {
@@ -68,11 +79,19 @@ async function getProductById(req, res) {
     const id = parseIdParam(req.params.id);
     if (!id) {
       return res.status(400).json({ message: "Invalid product ID" });
-    }
+    } 
 
     const product = await findProductById(id);
     if (!product) {
       return res.status(404).json({ message: "Product not found" });
+    }
+
+    if (!Array.isArray(product.offers)) {
+      const activeOffers = await listActiveOffersCustomer().catch((err) => {
+        console.error("Error fetching active offers for getProductById:", err);
+        return [];
+      });
+      product.offers = getApplicableOffersForProduct(product, activeOffers);
     }
 
     return res.status(200).json({

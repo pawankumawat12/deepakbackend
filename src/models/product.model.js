@@ -1,4 +1,10 @@
 const db = require("../../config/db");
+const {
+  listActiveOffersCustomer,
+  attachOffersToProduct,
+  attachOffersToProducts,
+  getApplicableOffersForProduct,
+} = require("./offer.model");
 
 const PRODUCT_COLUMNS = [
   "products.id",
@@ -19,8 +25,8 @@ function serializeImages(data) {
   return { ...data, images: JSON.stringify(data.images) };
 }
 
-function findProductById(id) {
-  return db("products")
+async function findProductById(id) {
+  const row = await db("products")
     .select([
       ...PRODUCT_COLUMNS,
       "categories.name as category_name",
@@ -36,7 +42,21 @@ function findProductById(id) {
     .where("products.id", id)
     .groupBy("products.id", "categories.name")
     .first();
+
+  if (!row) return null;
+
+  try {
+    const activeOffers = await listActiveOffersCustomer();
+    return attachOffersToProduct(row, activeOffers);
+  } catch (err) {
+    console.error("Error attaching offers in findProductById:", err);
+    return {
+      ...row,
+      offers: [],
+    };
+  }
 }
+
 
 function findProducts({
   page,
@@ -180,4 +200,8 @@ module.exports = {
   createProduct,
   updateProduct,
   deleteProduct,
+  attachOffersToProduct,
+  attachOffersToProducts,
+  getApplicableOffersForProduct,
 };
+

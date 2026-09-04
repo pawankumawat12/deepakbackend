@@ -103,10 +103,20 @@ async function respondWithCart(res, userId, message = "Success", options = {}) {
     offerCode: options.offerCode || null,
   });
 
-  const stockProblemItems = items.filter((it) => it.isOutOfStock || it.exceedsStock);
+  const enrichedItems = pricing.items || items;
+  const stockProblemItems = enrichedItems.filter(
+    (it) => it.isOutOfStock || it.exceedsStock
+  );
 
   const summary = {
     totalItems: pricing.total_items,
+    totalProductsDelivered: pricing.total_products_delivered ?? pricing.total_items,
+    totalQuantity: pricing.total_items,
+    cartQuantity: pricing.paid_items ?? pricing.total_items,
+    normalCartQuantity: pricing.paid_items ?? pricing.total_items,
+    paidItemsCount: pricing.paid_items ?? pricing.total_items,
+    freeItemsCount: pricing.free_items ?? 0,
+    bogoSavings: pricing.bogo_savings ?? 0,
     itemTypesCount: pricing.item_types_count,
     subtotal: pricing.subtotal,
     discountPercent: pricing.discount_percent,
@@ -157,7 +167,7 @@ async function respondWithCart(res, userId, message = "Success", options = {}) {
     success: true,
     message,
     data: {
-      items,
+      items: enrichedItems,
       summary,
       pricing,
       deliveryAddress,

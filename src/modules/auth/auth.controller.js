@@ -63,7 +63,7 @@ const issueVerificationOtp = async (
   registration,
   email,
   updateRegistration,
-  { resetResendPolicy = false } = {}
+  { resetResendPolicy = false, templateSlug = "login-verification-otp" } = {}
 ) => {
   const otp = Math.floor(1000 + Math.random() * 9000).toString();
   // Keep the existing OTP lifetime unchanged.
@@ -79,13 +79,19 @@ const issueVerificationOtp = async (
       : {}),
   });
 
-  return sendOtpEmail({ email, otp });
+  return sendOtpEmail({
+    email,
+    otp,
+    userName: registration.name || "there",
+    templateSlug,
+  });
 };
 
 const resendVerificationOtp = async (
   registration,
   email,
-  updateRegistration
+  updateRegistration,
+  { templateSlug = "login-verification-otp" } = {}
 ) => {
   const now = new Date();
 
@@ -150,7 +156,12 @@ const resendVerificationOtp = async (
     otp_resend_count: nextCount,
     otp_resend_locked_until: null,
   });
-  const result = await sendOtpEmail({ email, otp });
+  const result = await sendOtpEmail({
+    email,
+    otp,
+    userName: registration.name || "there",
+    templateSlug,
+  });
   return {
     result,
     resendCount: nextCount,
@@ -204,7 +215,11 @@ const forgotPassword = async (req, res) => {
         Date.now() + PASSWORD_RESET_EXPIRY_MS
       ),
     });
-    await sendPasswordResetEmail({ email, resetUrl });
+    await sendPasswordResetEmail({
+      email,
+      resetUrl,
+      userName: user.name || "there",
+    });
 
     return res.status(200).json({
       message:
@@ -303,8 +318,7 @@ const sendOtp = async (req, res) => {
       user.role === "admin" ||
       requestedRole === "admin" ||
       requestType === "login" ||
-      requestType === "admin_login" ||
-      Boolean(user.otp);
+      requestType === "admin_login";
 
     if (user.is_email_verified && !isLoginOtp) {
       return res.status(400).json({
@@ -313,7 +327,11 @@ const sendOtp = async (req, res) => {
       });
     }
 
-    const resend = await resendVerificationOtp(user, email, updateUser);
+    const resend = await resendVerificationOtp(user, email, updateUser, {
+      templateSlug: isLoginOtp
+        ? "login-verification-otp"
+        : "registration-verification",
+    });
 
     return res.status(200).json({
       success: true,
@@ -502,7 +520,10 @@ async function register(req, res) {
           existingUser,
           normalizedEmail,
           updateUser,
-          { resetResendPolicy: true }
+          {
+            resetResendPolicy: true,
+            templateSlug: "registration-verification",
+          }
         );
 
         return res.status(200).json({
@@ -546,6 +567,7 @@ async function register(req, res) {
 
     const result = await issueVerificationOtp(user, normalizedEmail, updateUser, {
       resetResendPolicy: true,
+      templateSlug: "registration-verification",
     });
 
     return res.status(201).json({
@@ -693,7 +715,8 @@ async function login(req, res) {
         const otpResult = await issueVerificationOtp(
           user,
           user.email,
-          updateUser
+          updateUser,
+          { templateSlug: "registration-verification" }
         );
         return res.status(403).json({
           success: false,
@@ -777,7 +800,9 @@ async function adminLogin(req, res) {
       !(await bcrypt.compare(password, admin.password))
     )
       return res.status(404).json({ message: "Invalid admin credentials" });
-    const result = await issueVerificationOtp(admin, email, updateUser);
+    const result = await issueVerificationOtp(admin, email, updateUser, {
+      templateSlug: "login-verification-otp",
+    });
     return res.status(200).json({
       message: "Credentials verified. OTP sent.",
       data: { messageId: result.messageId },
@@ -1011,7 +1036,11 @@ const requestEmailChange = async (req, res) => {
         pending_email_resend_locked_until: lockedUntil,
       });
 
-    await sendEmailChangeOtp({ email: normalizedEmail, otp });
+    await sendEmailChangeOtp({
+      email: normalizedEmail,
+      otp,
+      userName: user.name || "there",
+    });
 
     return res.status(200).json({
       success: true,
@@ -1089,7 +1118,11 @@ const resendEmailChangeOtp = async (req, res) => {
         pending_email_resend_locked_until: lockedUntil,
       });
 
-    await sendEmailChangeOtp({ email: pendingEmail, otp });
+    await sendEmailChangeOtp({
+      email: pendingEmail,
+      otp,
+      userName: user.name || "there",
+    });
 
     return res.status(200).json({
       success: true,
@@ -1353,7 +1386,11 @@ const updateProfile = async (req, res) => {
           pending_email_resend_locked_until: null,
         });
 
-      await sendEmailChangeOtp({ email: trimmedEmail, otp });
+      await sendEmailChangeOtp({
+        email: trimmedEmail,
+        otp,
+        userName: currentUser.name || "there",
+      });
 
       return res.status(200).json({
         success: true,

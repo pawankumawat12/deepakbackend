@@ -1,5 +1,8 @@
 const db = require("../../config/db");
-const transporter = require("../../config/mail");
+const {
+  renderEmailTemplate,
+  sendTemplatedMail,
+} = require("../services/emailTemplate.service");
 
 function findUserByEmail(email) {
   return db("users").where({ email }).first();
@@ -79,165 +82,97 @@ const ensurePendingEmailColumns = async () => {
 };
 ensurePendingEmailColumns();
 
-const sendOtp = async ({ email, otp }) => {
+const logDisabledTemplateEmail = async ({ email, templateSlug, emailType, variables }) => {
+  const rendered = await renderEmailTemplate(templateSlug, variables);
+  try {
+    const EmailLogModel = require("./emailLog.model");
+    await EmailLogModel.createEmailLog({
+      recipient: email,
+      subject: rendered.subject,
+      email_type: emailType,
+      status: "disabled",
+      body_html: rendered.html,
+      body_text: rendered.text,
+    });
+  } catch { }
+  return { messageId: "email-disabled" };
+};
+
+const sendOtp = async ({
+  email,
+  otp,
+  userName = "there",
+  templateSlug = "login-verification-otp",
+  emailType = "otp",
+}) => {
   const emailActive =
     (process.env.EMAIL_ACTIVE || "true").toLowerCase() !== "false";
-  const subject = "Your OTP Verification Code - SFC Cafe";
-  const text = `Your OTP is ${otp}. This OTP is valid for 5 minutes.`;
-  const html = `
-        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 12px;">
-          <h2 style="color: #4f7d16; margin-top: 0;">SFC Cafe Verification</h2>
-          <p style="font-size: 14px; color: #555;">Use the following One-Time Password (OTP) to complete your verification:</p>
-          <div style="font-size: 28px; font-weight: bold; letter-spacing: 6px; color: #111; background: #f4f8ec; padding: 12px 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
-            ${otp}
-          </div>
-          <p style="font-size: 12px; color: #888;">This OTP is valid for 5 minutes. If you did not request this code, please ignore this email.</p>
-        </div>
-      `;
+  const variables = { otp, userName, email };
 
   if (!emailActive) {
-    console.log(
-      `[EMAIL_ACTIVE=false] OTP for ${email}: ${otp} (email skipped)`
-    );
-    try {
-      const EmailLogModel = require("./emailLog.model");
-      await EmailLogModel.createEmailLog({
-        recipient: email,
-        subject,
-        email_type: "otp",
-        status: "disabled",
-        body_html: html,
-        body_text: text,
-      });
-    } catch { }
-    return { messageId: "email-disabled" };
+    console.log(`[EMAIL_ACTIVE=false] ${templateSlug} for ${email} (email skipped)`);
+    return logDisabledTemplateEmail({ email, templateSlug, emailType, variables });
   }
 
   try {
-    const { sendMail } = require("../services/smtp.service");
-    const result = await sendMail({
+    return await sendTemplatedMail({
       to: email,
-      subject,
-      text,
-      html,
-      emailType: "otp",
+      templateSlug,
+      variables,
+      emailType,
     });
-    return result;
   } catch (error) {
-    console.error("Dynamic SMTP OTP error:", error);
+    console.error("Templated OTP email error:", error);
     throw error;
   }
 };
 
-const sendEmailChangeOtp = async ({ email, otp }) => {
+const sendEmailChangeOtp = async ({ email, otp, userName = "there" }) => {
   const emailActive =
     (process.env.EMAIL_ACTIVE || "true").toLowerCase() !== "false";
-  const subject = "Verify your new email address - SFC Cafe";
-  const text = `Your OTP for changing your SFC Cafe account email is ${otp}. This code is valid for 10 minutes.`;
-  const html = `
-        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 16px; background: #ffffff;">
-          <div style="text-align: center; margin-bottom: 20px;">
-            <h2 style="color: #4f7d16; margin: 0; font-size: 22px;">SFC Cafe</h2>
-            <p style="font-size: 13px; color: #666; margin: 4px 0 0;">Email Verification Request</p>
-          </div>
-          <p style="font-size: 14px; color: #333; line-height: 1.5;">
-            We received a request to update your SFC Cafe account email to <strong>${email}</strong>.
-          </p>
-          <p style="font-size: 14px; color: #555;">Use the following One-Time Password (OTP) to complete this verification:</p>
-          <div style="font-size: 32px; font-weight: 800; letter-spacing: 8px; color: #1e3a1e; background: #f4f8ec; border: 1px dashed #4f7d16; padding: 16px 20px; border-radius: 12px; text-align: center; margin: 24px 0;">
-            ${otp}
-          </div>
-          <p style="font-size: 12px; color: #777; line-height: 1.4;">
-            ⏱️ This verification code is valid for <strong>10 minutes</strong>. If you did not request this email change, please ignore this email.
-          </p>
-          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-          <p style="font-size: 11px; color: #aaa; text-align: center; margin: 0;">
-            Secure Food Cafe (SFC Cafe) • Fast & Fresh Delivery
-          </p>
-        </div>
-      `;
+  const templateSlug = "email-change-verification";
+  const emailType = "email_change_otp";
+  const variables = { otp, userName, email };
 
   if (!emailActive) {
-    console.log(
-      `[EMAIL_ACTIVE=false] Email change OTP for ${email}: ${otp} (email skipped)`
-    );
-    try {
-      const EmailLogModel = require("./emailLog.model");
-      await EmailLogModel.createEmailLog({
-        recipient: email,
-        subject,
-        email_type: "email_change_otp",
-        status: "disabled",
-        body_html: html,
-        body_text: text,
-      });
-    } catch { }
-    return { messageId: "email-disabled" };
+    console.log(`[EMAIL_ACTIVE=false] ${templateSlug} for ${email} (email skipped)`);
+    return logDisabledTemplateEmail({ email, templateSlug, emailType, variables });
   }
 
   try {
-    const { sendMail } = require("../services/smtp.service");
-    const result = await sendMail({
+    return await sendTemplatedMail({
       to: email,
-      subject,
-      text,
-      html,
-      emailType: "email_change_otp",
+      templateSlug,
+      variables,
+      emailType,
     });
-    return result;
   } catch (error) {
-    console.error("Dynamic SMTP Email Change OTP error:", error);
+    console.error("Templated email change OTP error:", error);
     throw error;
   }
 };
 
-const sendPasswordResetEmail = async ({ email, resetUrl }) => {
+const sendPasswordResetEmail = async ({ email, resetUrl, userName = "there" }) => {
   const emailActive =
     (process.env.EMAIL_ACTIVE || "true").toLowerCase() !== "false";
-  const subject = "Reset your SFC Cafe password";
-  const text = `We received a request to reset your password. Use this link within 15 minutes: ${resetUrl}\n\nIf you did not request this, you can safely ignore this email.`;
-  const html = `
-        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #eee; border-radius: 12px;">
-          <h2 style="color: #4f7d16; margin-top: 0;">Password Reset Request</h2>
-          <p style="font-size: 14px; color: #555;">We received a request to reset your SFC Cafe password.</p>
-          <p style="margin: 24px 0;">
-            <a href="${resetUrl}" style="background-color: #4f7d16; color: #fff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">
-              Reset Password
-            </a>
-          </p>
-          <p style="font-size: 12px; color: #888;">This link expires in 15 minutes. If you did not request a password reset, you can safely ignore this email.</p>
-        </div>
-      `;
+  const templateSlug = "password-reset";
+  const emailType = "password_reset";
+  const variables = { resetUrl, userName, email };
 
   if (!emailActive) {
-    console.log(
-      `[EMAIL_ACTIVE=false] Password reset for ${email}: ${resetUrl} (email skipped)`
-    );
-    try {
-      const EmailLogModel = require("./emailLog.model");
-      await EmailLogModel.createEmailLog({
-        recipient: email,
-        subject,
-        email_type: "password_reset",
-        status: "disabled",
-        body_html: html,
-        body_text: text,
-      });
-    } catch { }
-    return { messageId: "email-disabled" };
+    console.log(`[EMAIL_ACTIVE=false] ${templateSlug} for ${email} (email skipped)`);
+    return logDisabledTemplateEmail({ email, templateSlug, emailType, variables });
   }
 
   try {
-    const { sendMail } = require("../services/smtp.service");
-    return await sendMail({
+    return await sendTemplatedMail({
       to: email,
-      subject,
-      text,
-      html,
-      emailType: "password_reset",
+      templateSlug,
+      variables,
+      emailType,
     });
   } catch (error) {
-    console.error("Dynamic SMTP password reset error:", error);
+    console.error("Templated password reset email error:", error);
     throw error;
   }
 };

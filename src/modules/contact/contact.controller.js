@@ -193,28 +193,18 @@ async function updateAdminContactQuery(req, res) {
 
       if (existing.email) {
         try {
-          const transporter = require("../../../config/mail");
-          transporter
-            .sendMail({
+          const { sendTemplatedMail } = require("../../services/emailTemplate.service");
+          sendTemplatedMail({
               to: existing.email,
-              subject: `Reply to your inquiry: ${existing.subject}`,
-              text: `Hello ${existing.name},\n\nWe have responded to your inquiry regarding "${existing.subject}":\n\n"${updatePayload.admin_reply}"\n\nBest regards,\nCustomer Support Team`,
-              html: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
-                  <h2 style="color: #1e293b; margin-top: 0;">Response to Your Inquiry</h2>
-                  <p>Hello <strong>${existing.name}</strong>,</p>
-                  <p>Thank you for reaching out to us. We have reviewed your query regarding: <em>"${existing.subject}"</em>.</p>
-                  <div style="background-color: #f8fafc; border-left: 4px solid #3b82f6; padding: 15px; margin: 20px 0; border-radius: 4px;">
-                    <p style="margin: 0 0 8px 0; font-size: 13px; color: #64748b; font-weight: bold;">Support Team Reply:</p>
-                    <p style="margin: 0; color: #1e293b; white-space: pre-wrap;">${updatePayload.admin_reply}</p>
-                  </div>
-                  <div style="background-color: #f1f5f9; padding: 12px; border-radius: 4px; font-size: 13px; color: #475569;">
-                    <p style="margin: 0 0 5px 0;"><strong>Your Original Message:</strong></p>
-                    <p style="margin: 0; font-style: italic;">"${existing.message}"</p>
-                  </div>
-                  <p style="margin-top: 20px; font-size: 14px; color: #64748b;">You can also view this conversation anytime directly in your account under Contact Us.</p>
-                </div>
-              `,
+              templateSlug: "contact-reply",
+              emailType: "contact_reply",
+              userId: existing.user_id,
+              variables: {
+                userName: existing.name,
+                inquirySubject: existing.subject,
+                adminReply: updatePayload.admin_reply,
+                originalMessage: existing.message,
+              },
             })
             .catch((mailErr) => console.error("Contact reply email send error:", mailErr));
         } catch (err) {

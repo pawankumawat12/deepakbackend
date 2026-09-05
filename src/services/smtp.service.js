@@ -213,43 +213,17 @@ async function testSmtpConnection({ to, customConfig = null } = {}) {
       ? `"${config.from_name}" <${config.from_email || config.user}>`
       : config.from_email || config.user;
 
-    const testSubject = "SFC Cafe - SMTP Test Email Successful!";
-    const testText = `Hello,\n\nThis is a test email sent from SFC Cafe using environment SMTP settings.\n\nSMTP Host: ${config.host}\nSMTP Port: ${config.port}\nEncryption: ${config.secure ? "SSL/TLS" : "STARTTLS (Port 587)"}\nSender: ${config.from_name} <${config.from_email || config.user}>\n\nYour SMTP server is configured and working perfectly!\n\nBest regards,\nSFC Cafe Team`;
-    const testHtml = `
-        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 16px; background-color: #ffffff;">
-          <div style="text-align: center; margin-bottom: 20px;">
-            <div style="display: inline-block; padding: 10px 16px; background-color: #dcfce7; color: #166534; font-weight: 800; border-radius: 12px; font-size: 16px;">
-              SMTP Configuration Active (.env)
-            </div>
-          </div>
-          <h2 style="color: #111827; margin: 0 0 10px 0; text-align: center; font-size: 20px;">SMTP Connection Verified!</h2>
-          <p style="color: #4b5563; font-size: 14px; line-height: 1.6; text-align: center; margin-bottom: 24px;">
-            This email confirms that your outgoing mail server settings in <strong>.env</strong> are properly configured and operational over IPv4.
-          </p>
-          <div style="background-color: #f9fafb; border-radius: 12px; padding: 16px; font-size: 13px; color: #374151; margin-bottom: 20px;">
-            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-              <span style="color: #6b7280;">SMTP Host:</span>
-              <strong style="font-family: monospace;">${config.host}</strong>
-            </div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-              <span style="color: #6b7280;">SMTP Port:</span>
-              <strong>${config.port} (${config.secure ? "SSL/TLS" : "STARTTLS"})</strong>
-            </div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-              <span style="color: #6b7280;">Username / Account:</span>
-              <strong>${config.user}</strong>
-            </div>
-            <div style="display: flex; justify-content: space-between;">
-              <span style="color: #6b7280;">From Sender:</span>
-              <strong>${config.from_name} &lt;${config.from_email || config.user}&gt;</strong>
-            </div>
-          </div>
-          <p style="font-size: 12px; color: #9ca3af; text-align: center; margin: 0;">
-            Sent automatically via SFC Cafe · ${new Date().toLocaleString("en-IN")}
-          </p>
-        </div>
-      `;
-
+    const { renderEmailTemplate } = require("./emailTemplate.service");
+    const rendered = await renderEmailTemplate("smtp-test", {
+      smtpHost: config.host,
+      smtpPort: config.port,
+      encryption: config.secure ? "SSL/TLS" : "STARTTLS (Port 587)",
+      sender: `${config.from_name} <${config.from_email || config.user}>`,
+      testedAt: new Date().toLocaleString("en-IN"),
+    });
+    const testSubject = rendered.subject;
+    const testText = rendered.text;
+    const testHtml = rendered.html;
     const testResult = await transporter.sendMail({
       from: fromAddress,
       to,

@@ -13,8 +13,12 @@ const {
   rejectOrderController,
   verifyRazorpayPayment,
 } = require("./order.controller");
+const { handleRazorpayWebhook } = require("../webhook/webhook.controller");
 
 const router = express.Router();
+
+// Public webhook endpoint for Razorpay payment notifications
+router.post("/webhook/razorpay", handleRazorpayWebhook);
 
 // Authenticated customer routes
 router.use(verifyToken);

@@ -20,6 +20,7 @@ const {
   emitToOrder,
 } = require("../../socket/socket.service");
 const { createRazorpayOrder } = require("../../services/razorpayService");
+const { finalizePaidOrder } = require("../../services/orderPayment.service");
 const db = require("../../../config/db");
 const { incrementOfferUsage } = require("../../models/offer.model");
 
@@ -535,296 +536,27 @@ async function verifyRazorpayPayment(req, res) {
       });
     }
 
-    // 7. FINALIZE PAYMENT + ORDER IN DB TRANSACTION
-    const result = await db.transaction(async (trx) => {
-      // Get order again using transaction
-      const currentOrder = await trx("orders")
-        .where({
-          id: orderId,
-          user_id: userId,
-        })
-        .forUpdate()
-        .first();
-
-      if (!currentOrder) {
-        const err = new Error("Order not found.");
-        err.statusCode = 404;
-        throw err;
-      }
-
-      // Idempotency check
-      if (
-        currentOrder.payment_status === "Paid"
-      ) {
-        return currentOrder;
-      }
-
-      // Get order items
-      const orderItems = await trx("order_items")
-        .where({
-          order_id: currentOrder.id,
-        })
-        .forUpdate();
-
-      if (
-        !orderItems ||
-        orderItems.length === 0
-      ) {
-        const err = new Error(
-          "Order items not found."
-        );
-
-        err.statusCode = 400;
-
-        throw err;
-      }
-
-      // DECREASE STOCK
-      for (const item of orderItems) {
-        const isMadeToOrder =
-          item.availability_type ===
-          "MADE_TO_ORDER";
-
-        // MADE_TO_ORDER doesn't consume stock
-        if (isMadeToOrder) {
-          continue;
-        }
-
-        const quantity =
-          Number(item.quantity) || 0;
-
-        if (quantity <= 0) {
-          const err = new Error(
-            `Invalid quantity for product ${item.product_id}.`
-          );
-
-          err.statusCode = 400;
-
-          throw err;
-        }
-
-        // Lock product row
-        const product = await trx("products")
-          .where({
-            id: item.product_id,
-          })
-          .forUpdate()
-          .first();
-
-        if (!product) {
-          const err = new Error(
-            `Product "${item.product_name}" no longer exists.`
-          );
-
-          err.statusCode = 400;
-
-          throw err;
-        }
-
-        if (!product.is_active) {
-          const err = new Error(
-            `Product "${item.product_name}" is no longer available.`
-          );
-
-          err.statusCode = 400;
-
-          throw err;
-        }
-
-        const currentStock =
-          Number(product.stock) || 0;
-
-        if (currentStock < quantity) {
-          const err = new Error(
-            `Insufficient stock for "${item.product_name}".`
-          );
-
-          err.statusCode = 400;
-
-          throw err;
-        }
-
-        await trx("products")
-          .where({
-            id: item.product_id,
-          })
-          .update({
-            stock: currentStock - quantity,
-            updated_at: trx.fn.now(),
-          });
-      }
-
-      // INCREMENT OFFER USAGE
-      let pricing = currentOrder.pricing_details_json;
-
-      if (
-        typeof pricing === "string"
-      ) {
-        try {
-          pricing = JSON.parse(pricing);
-        } catch {
-          pricing = null;
-        }
-      }
-
-      if (
-        pricing?.applied_offer?.id
-      ) {
-      
-        await incrementOfferUsage(
-          pricing.applied_offer.id,
-          trx
-        );
-      }
-
-      await trx("cart_items")
-        .where({
-          user_id: userId,
-        })
-        .del();
-
-      // UPDATE ORDER ITEMS
-      for (const item of orderItems) {
-        const isMadeToOrder =
-          item.availability_type ===
-          "MADE_TO_ORDER";
-
-        await trx("order_items")
-          .where({
-            id: item.id,
-          })
-          .update({
-            production_status:
-              isMadeToOrder
-                ? "PENDING_PRODUCTION"
-                : "COMPLETED",
-
-            updated_at: trx.fn.now(),
-          });
-      }
-
-      // UPDATE ORDER PAYMENT
-      const paymentDetails = {
-        razorpay_order_id:
-          razorpay_order_id,
-
-        razorpay_payment_id:
-          razorpay_payment_id,
-
-        razorpay_signature:
-          razorpay_signature,
-
-        verified_at:
-          new Date().toISOString(),
-      };
-
-      const [updatedOrder] =
-        await trx("orders")
-          .where({
-            id: currentOrder.id,
-          })
-          .update({
-            payment_status: "Paid",
-
-            transaction_id:
-              razorpay_payment_id,
-
-            payment_details_json:
-              JSON.stringify(
-                paymentDetails
-              ),
-
-            status: "Pending",
-
-            updated_at:
-              trx.fn.now(),
-          })
-          .returning("*");
-
-      return updatedOrder;
+    // 7. FINALIZE PAYMENT SAFELY & IDEMPOTENTLY
+    const { order: finalOrder, alreadyPaid } = await finalizePaidOrder({
+      orderId: order.id,
+      razorpayOrderId: razorpay_order_id,
+      razorpayPaymentId: razorpay_payment_id,
+      razorpaySignature: razorpay_signature,
+      source: "api",
     });
 
-    // 8. ADMIN NOTIFICATION
-    await notificationModel.createNotification({
-      role: "admin",
-
-      type: "payment_success",
-
-      title:
-        `Payment Received: #${result.order_number ||
-        result.id
-        }`,
-
-      message:
-        `Online payment of ₹${result.total_amount} received successfully for order #${result.order_number
-        }.`,
-
-      orderId:
-        result.id,
-
-      dataJson: {
-        orderId:
-          result.id,
-
-        orderNumber:
-          result.order_number,
-
-        customerName:
-          result.customer_name,
-
-        totalAmount:
-          result.total_amount,
-
-        paymentMethod:
-          result.payment_method,
-
-        paymentStatus:
-          result.payment_status,
-
-        orderStatus:
-          result.status,
-
-        razorpayPaymentId:
-          razorpay_payment_id,
-      },
-    });
-
-    // 9. SOCKET EVENT
-    emitToAdmin(
-      "payment_success",
-      {
-        order: result,
-
-        message:
-          `Payment received for order #${result.order_number}`,
-      }
-    );
-
-    // 10. RESPONSE
     return res.status(200).json({
       success: true,
-
-      message:
-        "Payment verified successfully.",
-
+      message: alreadyPaid
+        ? "Payment is already verified."
+        : "Payment verified successfully.",
       data: {
-        orderId:
-          result.id,
-
-        orderNumber:
-          result.order_number,
-
-        paymentStatus:
-          result.payment_status,
-
-        orderStatus:
-          result.status,
-
-        transactionId:
-          result.transaction_id,
-
-        totalAmount:
-          result.total_amount,
+        orderId: finalOrder.id,
+        orderNumber: finalOrder.order_number,
+        paymentStatus: finalOrder.payment_status,
+        orderStatus: finalOrder.status,
+        transactionId: finalOrder.transaction_id,
+        totalAmount: finalOrder.total_amount,
       },
     });
   } catch (error) {

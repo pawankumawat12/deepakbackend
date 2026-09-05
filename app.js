@@ -18,6 +18,7 @@ const dashboardRoutes = require("./src/modules/dashboard/dashboard.routes");
 const emailLogRoutes = require("./src/modules/emailLogs/emailLog.routes");
 const emailTemplateRoutes = require("./src/modules/emailTemplates/emailTemplate.routes");
 const heroSliderRoutes = require("./src/modules/heroSlider/heroSlider.routes");
+const webhookRoutes = require("./src/modules/webhook/webhook.routes");
 const cookieParser = require("cookie-parser");
 
 const app = express();
@@ -71,7 +72,14 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: "15mb" }));
+app.use(
+  express.json({
+    limit: "15mb",
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 
@@ -101,6 +109,8 @@ app.use("/api/v1/dashboard", dashboardRoutes);
 app.use("/api/v1/email-logs", emailLogRoutes);
 app.use("/api/v1/email-templates", emailTemplateRoutes);
 app.use("/api/v1/hero-sliders", heroSliderRoutes);
+app.use("/api/v1/webhooks", webhookRoutes);
+app.use("/api/v1/webhook", webhookRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

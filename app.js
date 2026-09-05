@@ -17,6 +17,7 @@ const contactRoutes = require("./src/modules/contact/contact.routes");
 const dashboardRoutes = require("./src/modules/dashboard/dashboard.routes");
 const emailLogRoutes = require("./src/modules/emailLogs/emailLog.routes");
 const emailTemplateRoutes = require("./src/modules/emailTemplates/emailTemplate.routes");
+const heroSliderRoutes = require("./src/modules/heroSlider/heroSlider.routes");
 const cookieParser = require("cookie-parser");
 
 const app = express();
@@ -99,6 +100,7 @@ app.use("/api/v1/contact", contactRoutes);
 app.use("/api/v1/dashboard", dashboardRoutes);
 app.use("/api/v1/email-logs", emailLogRoutes);
 app.use("/api/v1/email-templates", emailTemplateRoutes);
+app.use("/api/v1/hero-sliders", heroSliderRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

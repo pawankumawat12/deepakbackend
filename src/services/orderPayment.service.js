@@ -437,6 +437,14 @@ async function finalizePaidOrder({
       })
       .returning("*");
 
+    // Deduct raw ingredients inventory if product recipes exist
+    try {
+      const { deductIngredientStockForOrder } = require("./inventory.service");
+      await deductIngredientStockForOrder(currentOrder.id, trx);
+    } catch (ingErr) {
+      console.warn("[OrderPaymentService] Warning during ingredient deduction:", ingErr.message);
+    }
+
     return {
       order: updatedOrder,
       alreadyPaid: false,

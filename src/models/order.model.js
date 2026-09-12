@@ -309,6 +309,14 @@ async function createOrderWithTransaction({
       await trx("cart_items")
         .where({ user_id: userId })
         .del();
+
+      // Deduct raw ingredients inventory if product recipes exist
+      try {
+        const { deductIngredientStockForOrder } = require("../services/inventory.service");
+        await deductIngredientStockForOrder(order.id, trx);
+      } catch (ingErr) {
+        console.warn("[OrderModel] Warning during ingredient stock deduction:", ingErr.message);
+      }
     }
 
     // 12. RETURN ORDER
@@ -639,6 +647,14 @@ async function cancelOrder(orderId, cancelReason) {
             .increment("stock", item.quantity);
         }
       }
+    }
+
+    // Conditionally restore raw ingredients based on restore_stock_on_cancel
+    try {
+      const { restoreIngredientStockForOrder } = require("../services/inventory.service");
+      await restoreIngredientStockForOrder(orderId, trx, cancelReason);
+    } catch (restErr) {
+      console.warn("[OrderModel] Warning during ingredient stock restoration:", restErr.message);
     }
 
     return updatedOrder;

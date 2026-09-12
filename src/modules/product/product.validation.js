@@ -264,12 +264,12 @@ function validateProductListQuery({
     }
   }
 
-  if (search !== undefined) {
-    if (typeof search !== "string" || search.trim().length === 0) {
-      errors.search = "Search must be a non-empty string.";
+  if (search !== undefined && search !== "") {
+    if (typeof search !== "string") {
+      errors.search = "Search must be a string.";
     } else if (search.trim().length > 100) {
       errors.search = "Search must not exceed 100 characters.";
-    } else {
+    } else if (search.trim().length > 0) {
       filters.search = search.trim();
     }
   }

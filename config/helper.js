@@ -18,7 +18,7 @@ const generateAccessToken = (user) => {
     },
     ACCESS_SECRET,
     {
-      expiresIn: "15m",
+      expiresIn: "2h",
     }
   );
 };
@@ -90,7 +90,7 @@ const getAccessTokenCookieOptions = (req) => {
     sameSite: secure ? "none" : "lax",
     partitioned: secure,
     path: "/",
-    maxAge: 15 * 60 * 1000, // 15 minutes
+    maxAge: 2 * 60 * 60 * 1000, // 2 hours
   };
 };
 

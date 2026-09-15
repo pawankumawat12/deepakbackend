@@ -22,6 +22,7 @@ const {
 } = require("../../socket/socket.service");
 const { createRazorpayOrder, initiateRazorpayRefund } = require("../../services/razorpayService");
 const { finalizePaidOrder, handleRefundProcessed } = require("../../services/orderPayment.service");
+const { normalizeIndianPhone, isValidIndianPhone } = require("../../utils/phone.util");
 const db = require("../../../config/db");
 const { incrementOfferUsage } = require("../../models/offer.model");
 const { generateInvoicePdf } = require("../../services/invoice.service");
@@ -97,20 +98,6 @@ async function createOrder(req, res) {
       inputName ||
       req.user.name ||
       "Customer";
-
-    // Helper for Indian 10-digit phone normalization & validation (/^[6-9]\d{9}$/)
-    const normalizeIndianPhone = (raw) => {
-      if (!raw) return "";
-      let digits = String(raw).replace(/\D/g, "");
-      if (digits.length === 12 && digits.startsWith("91")) {
-        digits = digits.slice(2);
-      }
-      if (digits.length === 11 && digits.startsWith("0")) {
-        digits = digits.slice(1);
-      }
-      return digits;
-    };
-    const isValidIndianPhone = (val) => /^[6-9]\d{9}$/.test(val);
 
     let savedAddressData = null;
     if (addressId) {

@@ -1,3 +1,8 @@
+const {
+  normalizeIndianPhone,
+  isValidIndianPhone,
+} = require("../../utils/phone.util");
+
 function validateEmail(email) {
   const emailRegex =
     /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
@@ -5,8 +10,7 @@ function validateEmail(email) {
 }
 
 function validatePhone(phone) {
-  if (typeof phone !== "string") return false;
-  return /^[6-9]\d{9}$/.test(phone);
+  return isValidIndianPhone(phone);
 }
 
 function validatePassword(password) {
@@ -111,4 +115,7 @@ module.exports = {
   validateUpdateProfile,
   validateEmail,
   validatePhone,
+  normalizePhone: normalizeIndianPhone,
+  normalizeIndianPhone,
+  isValidIndianPhone,
 };

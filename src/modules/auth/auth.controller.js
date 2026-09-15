@@ -14,6 +14,8 @@ const {
   validateLogin,
   validatePassword,
   validateUpdateProfile,
+  normalizeIndianPhone,
+  isValidIndianPhone,
 } = require("./auth.validation");
 const {
   findUserByEmail,
@@ -709,7 +711,7 @@ async function register(req, res) {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const normalizedEmail = email ? email.trim().toLowerCase() : null;
-    const normalizedPhone = phone ? phone.trim() : null;
+    const normalizedPhone = phone ? normalizeIndianPhone(phone) : null;
 
     // 1. Check if user with this email already exists
     if (normalizedEmail) {
@@ -998,7 +1000,7 @@ async function login(req, res) {
       const normalizedEmail = email.trim().toLowerCase();
       user = await findUserByEmail(normalizedEmail);
     } else if (phone) {
-      user = await findUserByPhone(phone.trim());
+      user = await findUserByPhone(normalizeIndianPhone(phone));
     }
 
     if (!user || user.role !== "user") {
@@ -1827,7 +1829,7 @@ const updateProfile = async (req, res) => {
 
     const trimmedName = name.trim();
     const trimmedEmail = email ? email.trim().toLowerCase() : null;
-    const trimmedPhone = phone ? phone.trim() : null;
+    const trimmedPhone = phone ? normalizeIndianPhone(phone) : null;
 
     // Check if phone is already taken by another user
     if (trimmedPhone && trimmedPhone !== currentUser.phone) {
@@ -1981,10 +1983,34 @@ async function editCustomer(req, res) {
         .json({ success: false, message: "Customer not found" });
     }
 
+    let customerPhone = existing.phone;
+    if (phone !== undefined && phone !== null && String(phone).trim() !== "") {
+      const normalizedPhone = normalizeIndianPhone(phone);
+      if (!isValidIndianPhone(normalizedPhone)) {
+        return res.status(400).json({
+          success: false,
+          message: "Please enter a valid 10-digit Indian phone number.",
+        });
+      }
+      const duplicatePhone = await db("users")
+        .where({ phone: normalizedPhone })
+        .whereNot({ id: customerId })
+        .first();
+      if (duplicatePhone) {
+        return res.status(400).json({
+          success: false,
+          message: "Phone number is already registered to another customer.",
+        });
+      }
+      customerPhone = normalizedPhone;
+    } else if (phone === "") {
+      customerPhone = null;
+    }
+
     const updated = await updateUser(customerId, {
       name: name ? name.trim() : existing.name,
       email: email ? email.trim().toLowerCase() : existing.email,
-      phone: phone ? phone.trim() : existing.phone,
+      phone: customerPhone,
       updated_at: new Date(),
     });
 
@@ -2102,7 +2128,7 @@ async function submitBlockedSupportRequest(req, res) {
       user_id: user ? user.id : null,
       name: (name || user?.name || "Customer").trim(),
       email: normalizedEmail,
-      phone: phone || user?.phone || null,
+      phone: phone ? normalizeIndianPhone(phone) : (user?.phone || null),
       message: message.trim(),
       status: "pending",
     });
@@ -2291,6 +2317,87 @@ async function bulkDeleteCustomersHandler(req, res) {
   }
 }
 
+const changePassword = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    const { currentPassword, newPassword, confirmPassword } = req.body || {};
+
+    if (!currentPassword || !String(currentPassword).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Current password is required",
+      });
+    }
+
+    if (!newPassword || !String(newPassword).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "New password is required",
+      });
+    }
+
+    if (String(newPassword).length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: "New password must be at least 8 characters long",
+      });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "New password and confirmation password do not match",
+      });
+    }
+
+    const user = await findUserById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Verify current password if user has a password set
+    if (user.password) {
+      const isCurrentMatch = await bcrypt.compare(currentPassword, user.password);
+      if (!isCurrentMatch) {
+        return res.status(400).json({
+          success: false,
+          message: "Current password does not match our records",
+        });
+      }
+
+      // Disallow re-using the current password
+      const isSamePassword = await bcrypt.compare(newPassword, user.password);
+      if (isSamePassword) {
+        return res.status(400).json({
+          success: false,
+          message: "New password must be different from your current password",
+        });
+      }
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await updateUser(userId, {
+      password: hashedPassword,
+      updated_at: new Date(),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Password changed successfully!",
+    });
+  } catch (error) {
+    console.error("Change password error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to change password. Please try again.",
+    });
+  }
+};
+
 module.exports = {
   forgotPassword,
   resendPasswordResetOtp,
@@ -2308,6 +2415,7 @@ module.exports = {
   getMe,
   logout,
   updateProfile,
+  changePassword,
   requestEmailChange,
   resendEmailChangeOtp,
   verifyEmailChange,

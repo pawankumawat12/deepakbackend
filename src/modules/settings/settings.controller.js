@@ -8,8 +8,6 @@ const {
   updateLogoSettings,
   getOrderPricingSettings,
   updateOrderPricingSettings,
-  getSmtpSettings,
-  updateSmtpSettings,
   getResendSettings,
   updateResendSettings,
   getStoreStatusSettings,
@@ -71,6 +69,12 @@ async function updateTheme(req, res) {
       colorTheme,
       availableColorThemes,
     });
+
+    try {
+      emitToAll("theme_updated", updated);
+    } catch (err) {
+      console.warn("Could not emit theme_updated event:", err?.message);
+    }
 
     return res.status(200).json({
       success: true,

@@ -161,12 +161,12 @@ const sendEmailChangeOtp = async ({ email, otp, userName = "there" }) => {
   }
 };
 
-const sendPasswordResetEmail = async ({ email, resetUrl, userName = "there" }) => {
+const sendPasswordResetOtp = async ({ email, otp, userName = "there" }) => {
   const emailActive =
     (process.env.EMAIL_ACTIVE || "true").toLowerCase() !== "false";
   const templateSlug = "password-reset";
   const emailType = "password_reset";
-  const variables = { resetUrl, userName, email };
+  const variables = { otp, userName, email };
 
   if (!emailActive) {
     console.log(`[EMAIL_ACTIVE=false] ${templateSlug} for ${email} (email skipped)`);
@@ -181,9 +181,13 @@ const sendPasswordResetEmail = async ({ email, resetUrl, userName = "there" }) =
       emailType,
     });
   } catch (error) {
-    console.error("Templated password reset email queue error:", error);
+    console.error("Templated password reset OTP queue error:", error);
     throw error;
   }
+};
+
+const sendPasswordResetEmail = async ({ email, resetUrl, otp, userName = "there" }) => {
+  return await sendPasswordResetOtp({ email, otp: otp || resetUrl, userName });
 };
 
 async function listCustomers({
@@ -376,6 +380,7 @@ module.exports = {
   findUserByPhone,
   sendOtp,
   sendEmailChangeOtp,
+  sendPasswordResetOtp,
   sendPasswordResetEmail,
   updateUser,
   deleteUser,

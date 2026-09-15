@@ -12,6 +12,8 @@ const {
   getMe,
   logout,
   forgotPassword,
+  resendPasswordResetOtp,
+  verifyPasswordResetOtp,
   verifyPasswordResetToken,
   resetPassword,
   updateProfile,
@@ -59,7 +61,10 @@ async function allowInitialAdmin(req, res, next) {
 }
 
 router.post("/send-otp", otpSendLimiter, sendOtp);
-router.post("/forgot-password", forgotPassword);
+router.post("/forgot-password", otpSendLimiter, forgotPassword);
+router.post("/resend-forgot-password-otp", otpSendLimiter, resendPasswordResetOtp);
+router.post("/verify-forgot-password-otp", otpVerifyLimiter, verifyPasswordResetOtp);
+router.post("/reset-password", resetPassword);
 router.get("/reset-password/:accessToken", verifyPasswordResetToken);
 router.post("/reset-password/:accessToken", resetPassword);
 router.post("/register", register);

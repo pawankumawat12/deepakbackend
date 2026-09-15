@@ -1,5 +1,5 @@
 const db = require("../../config/db");
-const { sendMail } = require("./smtp.service");
+const { sendMail } = require("./resend.service");
 const { renderEmailTemplate } = require("./emailTemplate.service");
 
 const MAX_CONCURRENT_JOBS = 2;

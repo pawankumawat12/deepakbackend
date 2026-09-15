@@ -220,25 +220,69 @@ async function updateOrderPricingSettings(data) {
   return next;
 }
 
-async function getSmtpSettings({ maskPassword = true } = {}) {
-  const { getActiveSmtpConfig } = require("../services/smtp.service");
-  const config = getActiveSmtpConfig();
-  const hasPass = Boolean(config.pass);
+function maskApiKey(key) {
+  if (!key) return "";
+  const trimmed = String(key).trim();
+  if (trimmed.length <= 8) return "••••••••";
+  const prefix = trimmed.startsWith("re_") ? "re_" : trimmed.slice(0, 3);
+  const suffix = trimmed.slice(-4);
+  return `${prefix}${"•".repeat(Math.max(6, trimmed.length - prefix.length - 4))}${suffix}`;
+}
+
+async function getResendSettings({ maskApiKey: shouldMask = true } = {}) {
+  const dbSetting = await getSetting("resend_settings");
+  const envApiKey = (process.env.RESEND_API_KEY || "").trim();
+  const envFromEmail = (process.env.RESEND_FROM_EMAIL || "noreply@sfcbakers.com").trim();
+  const envFromName = (process.env.RESEND_FROM_NAME || "SFC Bakers").trim();
+  const envEmailActive = (process.env.EMAIL_ACTIVE || "true").trim().toLowerCase() !== "false";
+
+  const rawApiKey = (dbSetting?.api_key || envApiKey || "").trim();
+  const from_email = (dbSetting?.from_email || envFromEmail || "noreply@sfcbakers.com").trim();
+  const from_name = (dbSetting?.from_name || envFromName || "SFC Bakers").trim();
+  const is_enabled = envEmailActive && (dbSetting?.is_enabled !== undefined ? Boolean(dbSetting.is_enabled) : true);
+
   return {
-    host: config.host,
-    port: config.port,
-    secure: config.secure,
-    user: config.user,
-    password: maskPassword ? (hasPass ? "••••••••" : "") : config.pass,
-    is_password_set: hasPass,
-    from_email: config.from_email,
-    from_name: config.from_name,
-    is_enabled: true,
+    api_key: shouldMask ? maskApiKey(rawApiKey) : rawApiKey,
+    is_api_key_set: Boolean(rawApiKey),
+    from_email,
+    from_name,
+    is_enabled,
+  };
+}
+
+async function updateResendSettings(data) {
+  const current = await getResendSettings({ maskApiKey: false });
+  let nextApiKey = data.api_key !== undefined ? String(data.api_key).trim() : current.api_key;
+  if (!nextApiKey || nextApiKey.includes("•")) {
+    nextApiKey = current.api_key;
+  }
+
+  const next = {
+    api_key: nextApiKey,
+    from_email: data.from_email !== undefined ? String(data.from_email).trim() : current.from_email,
+    from_name: data.from_name !== undefined ? String(data.from_name).trim() : current.from_name,
+    is_enabled: data.is_enabled !== undefined ? Boolean(data.is_enabled) : current.is_enabled,
+  };
+
+  await setSetting("resend_settings", next);
+  return getResendSettings({ maskApiKey: true });
+}
+
+async function getSmtpSettings({ maskPassword = true } = {}) {
+  const resend = await getResendSettings({ maskApiKey: maskPassword });
+  return {
+    ...resend,
+    host: "resend.api",
+    port: 443,
+    secure: true,
+    user: resend.from_email,
+    password: resend.api_key,
+    is_password_set: resend.is_api_key_set,
   };
 }
 
 async function updateSmtpSettings(data) {
-  return getSmtpSettings({ maskPassword: true });
+  return await updateResendSettings(data);
 }
 
 const DEFAULT_STORE_STATUS = {
@@ -280,6 +324,8 @@ module.exports = {
   updateOrderPricingSettings,
   getSmtpSettings,
   updateSmtpSettings,
+  getResendSettings,
+  updateResendSettings,
   DEFAULT_STORE_STATUS,
   getStoreStatusSettings,
   updateStoreStatusSettings,

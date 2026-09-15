@@ -1,5 +1,5 @@
 const db = require("../../config/db");
-const { sendMail } = require("./smtp.service");
+const { sendMail } = require("./resend.service");
 
 function escapeHtml(value) {
   return String(value ?? "")

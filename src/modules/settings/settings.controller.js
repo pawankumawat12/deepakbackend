@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const {
   getThemeSettings,
   updateThemeSettings,
@@ -9,10 +10,12 @@ const {
   updateOrderPricingSettings,
   getSmtpSettings,
   updateSmtpSettings,
+  getResendSettings,
+  updateResendSettings,
   getStoreStatusSettings,
   updateStoreStatusSettings,
 } = require("../../models/settings.model");
-const { testSmtpConnection } = require("../../services/smtp.service");
+const { testResendConnection, sendMail } = require("../../services/resend.service");
 const {
   uploadFile,
   deleteFile,
@@ -242,91 +245,195 @@ async function updateOrderPricing(req, res) {
   }
 }
 
-async function getSmtp(req, res) {
+const adminSettingsOtpStore = new Map();
+
+function cleanAdminSettingsOtpStore() {
+  const now = Date.now();
+  for (const [key, val] of adminSettingsOtpStore.entries()) {
+    if (val.expiresAt < now) {
+      adminSettingsOtpStore.delete(key);
+    }
+  }
+}
+
+async function sendResendUpdateOtp(req, res) {
   try {
-    const data = await getSmtpSettings({ maskPassword: true });
+    cleanAdminSettingsOtpStore();
+    const adminEmail = req.user?.email;
+    const adminId = req.user?.id || req.user?.userId;
+
+    if (!adminEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "Admin email address not found on current session.",
+      });
+    }
+
+    const { api_key, from_email, from_name, is_enabled } = req.body;
+
+    const otp = String(crypto.randomInt(100000, 999999));
+    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+    adminSettingsOtpStore.set(`admin_${adminId}`, {
+      otp,
+      expiresAt,
+      pendingData: { api_key, from_email, from_name, is_enabled },
+    });
+
+    const subject = "Security Verification: Authorize Resend Credential Update";
+    const html = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 28px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          <h2 style="color: #6366f1; margin: 0; font-size: 22px; font-weight: 800;">SFC BAKERS ADMIN</h2>
+          <p style="color: #64748b; font-size: 13px; margin: 4px 0 0;">Email System Security Verification</p>
+        </div>
+        <div style="border-top: 1px solid #f1f5f9; padding-top: 20px;">
+          <p style="color: #334155; font-size: 14px; line-height: 1.6;">
+            An update to the <strong>Resend Email Credentials</strong> was requested from your Admin account.
+          </p>
+          <p style="color: #334155; font-size: 14px; line-height: 1.6;">
+            Please enter the 6-digit verification code below to authorize and activate these credentials:
+          </p>
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin: 24px 0; text-align: center;">
+            <span style="font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #64748b; font-weight: 700; display: block; margin-bottom: 6px;">One-Time Password (OTP)</span>
+            <span style="font-size: 34px; letter-spacing: 8px; color: #0f172a; font-family: monospace; font-weight: 800;">${otp}</span>
+          </div>
+          <p style="color: #64748b; font-size: 12px; line-height: 1.5;">
+            ⏰ This verification code is strictly valid for <strong>10 minutes</strong>.
+          </p>
+          <p style="color: #ef4444; font-size: 12px; line-height: 1.5;">
+            ⚠️ If you did not request this update, do not share this code with anyone. Your credentials will remain unchanged until verified.
+          </p>
+        </div>
+      </div>
+    `;
+
+    await sendMail({
+      to: adminEmail,
+      subject,
+      html,
+      text: `Your Resend credentials authorization code is ${otp}. Valid for 10 minutes.`,
+      emailType: "admin_settings_otp",
+      userId: adminId,
+    });
+
     return res.status(200).json({
       success: true,
-      message: "SMTP settings fetched successfully",
+      message: `A 6-digit security code was dispatched to ${adminEmail}. Please check your inbox.`,
+    });
+  } catch (error) {
+    console.error("Send Resend update OTP error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error?.message || "Failed to send verification code.",
+    });
+  }
+}
+
+async function getResend(req, res) {
+  try {
+    const data = await getResendSettings({ maskApiKey: true });
+    return res.status(200).json({
+      success: true,
+      message: "Resend settings fetched successfully",
       data,
     });
   } catch (error) {
-    console.error("Get SMTP error:", error);
+    console.error("Get Resend error:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to fetch SMTP settings",
+      message: "Failed to fetch Resend settings",
     });
   }
 }
 
-async function updateSmtp(req, res) {
+async function updateResend(req, res) {
   try {
-    const { host, port, secure, user, password, from_email, from_name, is_enabled } = req.body;
+    cleanAdminSettingsOtpStore();
+    const adminId = req.user?.id || req.user?.userId;
+    const { api_key, from_email, from_name, is_enabled, otp } = req.body;
 
-    if (!host || !String(host).trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "SMTP host is required (e.g. smtp.gmail.com)",
-      });
+    const current = await getResendSettings({ maskApiKey: false });
+
+    // Check if sensitive credentials (API key or From Email) are being changed
+    const isApiKeyChanged =
+      api_key &&
+      !api_key.includes("•") &&
+      api_key.trim() !== current.api_key;
+    const isFromEmailChanged =
+      from_email &&
+      from_email.trim().toLowerCase() !== (current.from_email || "").toLowerCase();
+
+    // If sensitive credentials changed, require valid OTP verification
+    if (isApiKeyChanged || isFromEmailChanged) {
+      if (!otp || String(otp).trim().length !== 6) {
+        return res.status(400).json({
+          success: false,
+          requireOtp: true,
+          message:
+            "A 6-digit security OTP sent to your admin email is required to update credentials.",
+        });
+      }
+
+      const record = adminSettingsOtpStore.get(`admin_${adminId}`);
+      if (!record || record.expiresAt < Date.now()) {
+        adminSettingsOtpStore.delete(`admin_${adminId}`);
+        return res.status(400).json({
+          success: false,
+          requireOtp: true,
+          message: "Verification code has expired or was not requested. Please request a new code.",
+        });
+      }
+
+      if (String(record.otp).trim() !== String(otp).trim()) {
+        return res.status(400).json({
+          success: false,
+          requireOtp: true,
+          message: "Invalid verification code. Please check and try again.",
+        });
+      }
+
+      // OTP verified successfully! Clear it
+      adminSettingsOtpStore.delete(`admin_${adminId}`);
     }
 
-    if (!user || !String(user).trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "SMTP username / account email is required",
-      });
-    }
-
-    const updated = await updateSmtpSettings({
-      host,
-      port: Number(port) || 587,
-      secure: Boolean(secure),
-      user,
-      password,
+    const updated = await updateResendSettings({
+      api_key,
       from_email,
       from_name,
-      is_enabled: is_enabled !== false,
+      is_enabled,
     });
 
     return res.status(200).json({
       success: true,
-      message: "SMTP settings saved and updated successfully!",
+      message: "Resend email settings updated successfully!",
       data: updated,
     });
   } catch (error) {
-    console.error("Update SMTP error:", error);
+    console.error("Update Resend error:", error);
     return res.status(500).json({
       success: false,
-      message: error?.message || "Failed to update SMTP settings",
+      message: error?.message || "Failed to update Resend settings.",
     });
   }
 }
 
-async function testSmtp(req, res) {
+async function testResend(req, res) {
   try {
-    const { to, host, port, secure, user, password, from_email, from_name } = req.body;
+    const { to, api_key, from_email, from_name } = req.body;
     const recipient = to || req.user?.email || "pawan@yopmail.com";
 
     let customConfig = null;
-    if (host && user) {
-      const currentSaved = await getSmtpSettings({ maskPassword: false });
-      let testPass = password;
-      if (!testPass || testPass === "••••••••") {
-        testPass = currentSaved.password;
-      }
+    if (api_key && !api_key.includes("•")) {
       customConfig = {
-        host: String(host).trim(),
-        port: Number(port) || 587,
-        secure: Boolean(secure),
-        user: String(user).trim(),
-        pass: testPass,
-        from_email: from_email ? String(from_email).trim() : user,
+        api_key: String(api_key).trim(),
+        from_email: from_email ? String(from_email).trim() : undefined,
         from_name: from_name || "SFC Bakers",
         is_enabled: true,
       };
     }
 
-    const result = await testSmtpConnection({ to: recipient, customConfig });
+    const result = await testResendConnection({ to: recipient, customConfig });
 
     return res.status(200).json({
       success: true,
@@ -334,12 +441,27 @@ async function testSmtp(req, res) {
       data: result,
     });
   } catch (error) {
-    console.error("Test SMTP error:", error);
+    console.error("Test Resend error:", error);
     return res.status(400).json({
       success: false,
-      message: error?.message || "Failed to connect to SMTP server. Please check your credentials and host settings.",
+      message:
+        error?.message ||
+        "Failed to dispatch test email via Resend. Check API key and domain configuration.",
     });
   }
+}
+
+// Backwards compatibility wrappers
+async function getSmtp(req, res) {
+  return await getResend(req, res);
+}
+
+async function updateSmtp(req, res) {
+  return await updateResend(req, res);
+}
+
+async function testSmtp(req, res) {
+  return await testResend(req, res);
 }
 
 async function getStoreStatus(req, res) {
@@ -396,6 +518,10 @@ module.exports = {
   getSmtp,
   updateSmtp,
   testSmtp,
+  getResend,
+  updateResend,
+  sendResendUpdateOtp,
+  testResend,
   getStoreStatus,
   updateStoreStatus,
 };

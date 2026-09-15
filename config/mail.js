@@ -1,10 +1,10 @@
 const {
-  createTransporter,
   sendMail,
-  getActiveSmtpConfig,
-} = require("../src/services/smtp.service");
+  getActiveEmailConfig,
+  isEmailActive,
+} = require("../src/services/resend.service");
 
-// Environment-driven Transporter Bridge
+// Environment-driven Transporter Bridge for Resend
 const transporter = {
   sendMail: async function (options) {
     return await sendMail({
@@ -14,11 +14,11 @@ const transporter = {
       html: options.html,
     });
   },
-  getConfig: function () {
-    return getActiveSmtpConfig();
+  getConfig: async function () {
+    return await getActiveEmailConfig();
   },
-  getTransporter: function () {
-    return createTransporter();
+  isEmailActive: async function () {
+    return await isEmailActive();
   },
 };
 

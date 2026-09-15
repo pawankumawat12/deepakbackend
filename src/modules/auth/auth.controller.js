@@ -24,6 +24,7 @@ const {
   createUser,
   sendOtp: sendOtpEmail,
   sendEmailChangeOtp,
+  sendPasswordResetOtp,
   sendPasswordResetEmail,
   updateUser,
   deleteUser,
@@ -225,85 +226,254 @@ const forgotPassword = async (req, res) => {
       }
     }
 
-    const resetToken = crypto.randomBytes(32).toString("base64url");
-    const resetUrlBase =
-      user.role === "admin"
-        ? process.env.ADMIN_URL || "http://localhost:5173"
-        : process.env.FRONTEND_URL || "http://localhost:3000";
-    const resetUrl = `${resetUrlBase}/reset-password?token=${encodeURIComponent(
-      resetToken
-    )}`;
+    const now = new Date();
+
+    // Check if account is temporarily locked due to excessive failed attempts or resends
+    if (user.password_reset_locked_until && new Date(user.password_reset_locked_until) > now) {
+      const waitSeconds = secondsRemaining(user.password_reset_locked_until);
+      return res.status(429).json({
+        message: `Too many attempts. Password reset is locked. Please try again after ${waitSeconds} seconds.`,
+        locked: true,
+        waitSeconds,
+      });
+    }
+
+    // Check resend cooldown (30s)
+    if (user.password_reset_sent_at) {
+      const timeSinceLast = now.getTime() - new Date(user.password_reset_sent_at).getTime();
+      if (timeSinceLast < OTP_RESEND_COOLDOWN_MS) {
+        const remaining = Math.ceil((OTP_RESEND_COOLDOWN_MS - timeSinceLast) / 1000);
+        return res.status(429).json({
+          message: `Please wait ${remaining} seconds before requesting a new code.`,
+          waitSeconds: remaining,
+        });
+      }
+    }
+
+    // Check resend count limit
+    const currentResendCount = Number(user.password_reset_resend_count || 0);
+    if (currentResendCount >= OTP_RESEND_LIMIT) {
+      const lockUntil = new Date(Date.now() + OTP_RESEND_LOCK_MS);
+      await updateUser(user.id, {
+        password_reset_locked_until: lockUntil,
+        password_reset_otp: null,
+      });
+      return res.status(429).json({
+        message: "Maximum OTP resend limit reached. Password reset locked for 10 minutes.",
+        locked: true,
+        waitSeconds: Math.ceil(OTP_RESEND_LOCK_MS / 1000),
+      });
+    }
+
+    // Generate 6-digit numeric OTP
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    const expireAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
     await updateUser(user.id, {
-      password_reset_token: hashResetToken(resetToken),
-      password_reset_expires_at: new Date(
-        Date.now() + PASSWORD_RESET_EXPIRY_MS
-      ),
+      password_reset_otp: hashResetToken(otp),
+      password_reset_expires_at: expireAt,
+      password_reset_sent_at: now,
+      password_reset_attempts: 0,
+      password_reset_resend_count: currentResendCount + 1,
+      password_reset_locked_until: null,
+      password_reset_verified_token: null,
     });
-    await sendPasswordResetEmail({
+
+    await sendPasswordResetOtp({
       email,
-      resetUrl,
+      otp,
       userName: user.name || "there",
     });
 
     return res.status(200).json({
-      message:
-        "A password reset link has been sent to your email. Please check your inbox.",
+      success: true,
+      message: "A 6-digit verification code has been sent to your email. Please check your inbox.",
+      resendCooldown: 30,
+      attemptsRemaining: OTP_RESEND_LIMIT - (currentResendCount + 1),
     });
   } catch (error) {
     console.error("Forgot password error:", error);
     return res
       .status(500)
-      .json({ message: "Failed to send password reset link" });
+      .json({ message: "Failed to send password reset verification code" });
+  }
+};
+
+const resendPasswordResetOtp = async (req, res) => {
+  return await forgotPassword(req, res);
+};
+
+const verifyPasswordResetOtp = async (req, res) => {
+  try {
+    const email = req.body?.email?.trim().toLowerCase();
+    const otp = req.body?.otp ? String(req.body.otp).trim() : "";
+
+    if (!email || !otp) {
+      return res.status(400).json({ message: "Email and 6-digit OTP are required" });
+    }
+
+    const user = await findUserByEmail(email);
+    if (!user) {
+      return res.status(404).json({ message: "Email does not exist" });
+    }
+
+    const now = new Date();
+
+    // Check if locked
+    if (user.password_reset_locked_until && new Date(user.password_reset_locked_until) > now) {
+      const waitSeconds = secondsRemaining(user.password_reset_locked_until);
+      return res.status(429).json({
+        message: `Password reset is locked due to too many failed attempts. Please try again after ${waitSeconds} seconds.`,
+        locked: true,
+        waitSeconds,
+      });
+    }
+
+    // Check if OTP was sent and not expired
+    if (!user.password_reset_otp || !user.password_reset_expires_at || new Date(user.password_reset_expires_at) < now) {
+      return res.status(400).json({
+        message: "Verification code has expired. Please request a new code.",
+        expired: true,
+      });
+    }
+
+    // Verify OTP hash
+    const hashedInput = hashResetToken(otp);
+    if (user.password_reset_otp !== hashedInput) {
+      const nextAttempts = Number(user.password_reset_attempts || 0) + 1;
+      const MAX_OTP_ATTEMPTS = 5;
+
+      if (nextAttempts >= MAX_OTP_ATTEMPTS) {
+        const lockUntil = new Date(Date.now() + OTP_RESEND_LOCK_MS);
+        await updateUser(user.id, {
+          password_reset_attempts: nextAttempts,
+          password_reset_locked_until: lockUntil,
+          password_reset_otp: null,
+        });
+        return res.status(429).json({
+          message: "Too many failed attempts. Password reset is locked for 10 minutes.",
+          locked: true,
+          waitSeconds: Math.ceil(OTP_RESEND_LOCK_MS / 1000),
+        });
+      }
+
+      await updateUser(user.id, {
+        password_reset_attempts: nextAttempts,
+      });
+
+      return res.status(400).json({
+        message: `Invalid verification code. ${MAX_OTP_ATTEMPTS - nextAttempts} attempts remaining.`,
+        attemptsRemaining: MAX_OTP_ATTEMPTS - nextAttempts,
+      });
+    }
+
+    // OTP is valid! Issue single-use verified reset token valid for 10 minutes
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const tokenExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await updateUser(user.id, {
+      password_reset_otp: null,
+      password_reset_attempts: 0,
+      password_reset_verified_token: hashResetToken(resetToken),
+      password_reset_expires_at: tokenExpiresAt,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "OTP verified successfully. You may now set your new password.",
+      resetToken,
+    });
+  } catch (error) {
+    console.error("Verify password reset OTP error:", error);
+    return res.status(500).json({ message: "Failed to verify reset code" });
   }
 };
 
 const verifyPasswordResetToken = async (req, res) => {
   try {
-    const user = await findValidPasswordResetUser(req.params.accessToken);
+    const token = req.params.accessToken || req.query.token;
+    if (!token) return res.status(400).json({ message: "Reset token is required" });
+
+    const hashed = hashResetToken(token);
+    const user = await db("users")
+      .where(function () {
+        this.where({ password_reset_verified_token: hashed }).orWhere({ password_reset_token: hashed });
+      })
+      .where("password_reset_expires_at", ">", new Date())
+      .first();
+
     if (!user) {
       return res
         .status(400)
-        .json({ message: "Invalid or expired password reset link" });
+        .json({ message: "Invalid or expired password reset token" });
     }
 
-    return res.status(200).json({ message: "Password reset link is valid" });
+    return res.status(200).json({ message: "Password reset token is valid" });
   } catch (error) {
     console.error("Verify password reset token error:", error);
     return res
       .status(500)
-      .json({ message: "Unable to verify password reset link" });
+      .json({ message: "Unable to verify password reset token" });
   }
 };
 
 const resetPassword = async (req, res) => {
   try {
-    const { accessToken } = req.params;
+    const token = req.body?.resetToken || req.body?.accessToken || req.params?.accessToken;
+    const email = req.body?.email?.trim().toLowerCase();
     const { password } = req.body || {};
-    if (!accessToken || !password)
+
+    if (!token || !password) {
       return res
         .status(400)
-        .json({ message: "Access token and password are required" });
-    if (!validatePassword(password))
-      return res
-        .status(400)
-        .json({
-          message:
-            "Password must be 8+ characters and include upper, lower, number, and special character",
+        .json({ message: "Reset token and new password are required" });
+    }
+
+    if (!validatePassword(password)) {
+      return res.status(400).json({
+        message:
+          "Password must be 8+ characters and include upper, lower, number, and special character",
+      });
+    }
+
+    const hashedToken = hashResetToken(token);
+    let query = db("users")
+      .where(function () {
+        this.where({ password_reset_verified_token: hashedToken }).orWhere({
+          password_reset_token: hashedToken,
         });
-    const user = await findValidPasswordResetUser(accessToken);
+      })
+      .where("password_reset_expires_at", ">", new Date());
+
+    if (email) {
+      query = query.andWhere({ email });
+    }
+
+    const user = await query.first();
+
     if (!user) {
       return res
         .status(400)
-        .json({ message: "Invalid or expired password reset link" });
+        .json({ message: "Invalid or expired password reset session. Please request a new code." });
     }
+
     await updateUser(user.id, {
       password: await bcrypt.hash(password, 10),
       access_token: null,
       password_reset_token: null,
+      password_reset_verified_token: null,
+      password_reset_otp: null,
       password_reset_expires_at: null,
+      password_reset_sent_at: null,
+      password_reset_attempts: 0,
+      password_reset_resend_count: 0,
+      password_reset_locked_until: null,
     });
-    return res.status(200).json({ message: "Password reset successfully" });
+
+    return res.status(200).json({
+      success: true,
+      message: "Password reset successfully! Please log in with your new password.",
+    });
   } catch (error) {
     console.error("Reset password error:", error);
     return res.status(500).json({ message: "Unable to reset password" });
@@ -2123,6 +2293,8 @@ async function bulkDeleteCustomersHandler(req, res) {
 
 module.exports = {
   forgotPassword,
+  resendPasswordResetOtp,
+  verifyPasswordResetOtp,
   verifyPasswordResetToken,
   resetPassword,
   sendOtp,

@@ -13,6 +13,10 @@ const {
   getSmtp,
   updateSmtp,
   testSmtp,
+  getResend,
+  updateResend,
+  sendResendUpdateOtp,
+  testResend,
   getStoreStatus,
   updateStoreStatus,
 } = require("./settings.controller");
@@ -34,6 +38,13 @@ router.put("/logo", verifyToken, isAdmin, uploadImage.single("logo"), updateLogo
 router.get("/order-pricing", getOrderPricing);
 router.put("/order-pricing", verifyToken, isAdmin, updateOrderPricing);
 
+// Resend Email Settings
+router.get("/email", verifyToken, isAdmin, getResend);
+router.put("/email", verifyToken, isAdmin, updateResend);
+router.post("/email/send-otp", verifyToken, isAdmin, sendResendUpdateOtp);
+router.post("/email/test", verifyToken, isAdmin, testResend);
+
+// Backwards-compatible SMTP aliases
 router.get("/smtp", verifyToken, isAdmin, getSmtp);
 router.put("/smtp", verifyToken, isAdmin, updateSmtp);
 router.post("/smtp/test", verifyToken, isAdmin, testSmtp);

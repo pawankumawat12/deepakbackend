@@ -136,12 +136,12 @@ const sendOtp = async ({
   }
 };
 
-const sendEmailChangeOtp = async ({ email, otp, userName = "there" }) => {
+const sendEmailChangeOtp = async ({ email, newEmail, otp, userName = "there" }) => {
   const emailActive =
     (process.env.EMAIL_ACTIVE || "true").toLowerCase() !== "false";
   const templateSlug = "email-change-verification";
   const emailType = "email_change_otp";
-  const variables = { otp, userName, email };
+  const variables = { otp, userName, email, newEmail: newEmail || email };
 
   if (!emailActive) {
     console.log(`[EMAIL_ACTIVE=false] ${templateSlug} for ${email} (email skipped)`);

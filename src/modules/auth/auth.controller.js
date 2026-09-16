@@ -62,6 +62,16 @@ const isEmailVerifyEnabled = () => {
   return String(val).trim().toLowerCase() === "true";
 };
 
+// Determines whether Email Change OTP verification is required (only when EMAILVERIFY/EMAIL_VERIFY/IS_EMAIL_VERIFY is 'true')
+const isEmailChangeVerifyRequired = () => {
+  const val =
+    process.env.EMAILVERIFY ??
+    process.env.EMAIL_VERIFY ??
+    process.env.IS_EMAIL_VERIFY;
+  if (val === undefined || val === null || val === "") return false;
+  return String(val).trim().toLowerCase() === "true";
+};
+
 // Determines whether email delivery is active
 const isEmailActive = () => {
   const val = process.env.EMAIL_ACTIVE;
@@ -1508,6 +1518,46 @@ const requestEmailChange = async (req, res) => {
       });
     }
 
+    // Check if verification via OTP is required by environment config
+    if (!isEmailChangeVerifyRequired()) {
+      const updatedUsers = await db("users")
+        .where({ id: userId })
+        .update({
+          email: normalizedEmail,
+          is_email_verified: true,
+          pending_email: null,
+          pending_email_otp: null,
+          pending_email_expire_at: null,
+          pending_email_sent_at: null,
+          pending_email_resend_count: 0,
+          pending_email_resend_locked_until: null,
+          updated_at: new Date(),
+        })
+        .returning([
+          "id",
+          "name",
+          "email",
+          "phone",
+          "role",
+          "image",
+        ]);
+
+      const updatedUser = Array.isArray(updatedUsers) ? updatedUsers[0] : updatedUsers;
+      const accessToken = generateAccessToken(updatedUser);
+      const refreshToken = generateRefreshToken(updatedUser);
+
+      res.cookie("accessToken", accessToken, getAccessTokenCookieOptions(req));
+      res.cookie("refreshToken", refreshToken, getRefreshTokenCookieOptions(req));
+
+      return res.status(200).json({
+        success: true,
+        requiresOtp: false,
+        message: "Email address updated successfully!",
+        user: updatedUser,
+        accessToken,
+      });
+    }
+
     const now = new Date();
 
     // Check resend lock
@@ -1565,15 +1615,19 @@ const requestEmailChange = async (req, res) => {
         pending_email_resend_locked_until: lockedUntil,
       });
 
+    // Send OTP to CURRENT EMAIL (before email) per requirement
     await sendEmailChangeOtp({
-      email: normalizedEmail,
+      email: user.email,
+      newEmail: normalizedEmail,
       otp,
       userName: user.name || "there",
     });
 
     return res.status(200).json({
       success: true,
-      message: `Verification code sent to ${normalizedEmail}`,
+      requiresOtp: true,
+      message: `Verification code sent to your current email (${user.email})`,
+      currentEmail: user.email,
       pendingEmail: normalizedEmail,
       retryAfter: OTP_RESEND_COOLDOWN_MS / 1000,
     });
@@ -1647,15 +1701,18 @@ const resendEmailChangeOtp = async (req, res) => {
         pending_email_resend_locked_until: lockedUntil,
       });
 
+    // Send OTP to CURRENT EMAIL (before email) per requirement
     await sendEmailChangeOtp({
-      email: pendingEmail,
+      email: user.email,
+      newEmail: pendingEmail,
       otp,
       userName: user.name || "there",
     });
 
     return res.status(200).json({
       success: true,
-      message: `New verification code resent to ${pendingEmail}`,
+      message: `New verification code resent to your current email (${user.email})`,
+      currentEmail: user.email,
       pendingEmail,
       retryAfter: OTP_RESEND_COOLDOWN_MS / 1000,
     });
@@ -1859,11 +1916,13 @@ const updateProfile = async (req, res) => {
       }
     }
 
+    const shouldVerifyEmailChange = isEmailChanging && isEmailChangeVerifyRequired();
+
     const updateData = {
       name: trimmedName,
       phone: trimmedPhone,
-      // Note: we KEEP current email until verified via OTP if email was changed!
-      email: isEmailChanging ? currentUser.email : trimmedEmail,
+      email: shouldVerifyEmailChange ? currentUser.email : trimmedEmail,
+      ...(shouldVerifyEmailChange ? {} : { is_email_verified: true }),
       updated_at: new Date(),
     };
 
@@ -1895,8 +1954,8 @@ const updateProfile = async (req, res) => {
       ? updatedUsers[0]
       : updatedUsers;
 
-    // If customer entered a new email, trigger the OTP verification process automatically
-    if (isEmailChanging) {
+    // If customer/admin entered a new email and OTP verification is required:
+    if (shouldVerifyEmailChange) {
       const now = new Date();
       const otp = crypto.randomInt(100000, 1000000).toString();
       const expireAt = new Date(now.getTime() + 10 * 60 * 1000);
@@ -1912,16 +1971,20 @@ const updateProfile = async (req, res) => {
           pending_email_resend_locked_until: null,
         });
 
+      // Send OTP to CURRENT EMAIL (before email) per requirement
       await sendEmailChangeOtp({
-        email: trimmedEmail,
+        email: currentUser.email,
+        newEmail: trimmedEmail,
         otp,
-        userName: currentUser.name || "there",
+        userName: currentUser.name || "Administrator",
       });
 
       return res.status(200).json({
         success: true,
-        message: `Profile updated. A 4-digit verification code was sent to ${trimmedEmail} to complete your email change.`,
+        message: `Profile details saved. A 6-digit verification code was sent to your current email (${currentUser.email}) to confirm changing your email to ${trimmedEmail}.`,
         requiresEmailOtp: true,
+        requiresOtp: true,
+        currentEmail: currentUser.email,
         pendingEmail: trimmedEmail,
         user: {
           id: updatedUser.id,

@@ -19,6 +19,8 @@ const {
   downloadInvoiceHandler,
 } = require("./order.controller");
 const { handleRazorpayWebhook } = require("../webhook/webhook.controller");
+const { orderCreateLimiter } = require("../../../middleware/rateLimiter");
+const idempotencyMiddleware = require("../../../middleware/idempotency.middleware");
 
 const router = express.Router();
 
@@ -29,7 +31,7 @@ router.post("/webhook/razorpay", handleRazorpayWebhook);
 router.use(verifyToken);
 router.get("/export", isAdmin, exportOrdersHandler);
 router.post("/bulk-status", isAdmin, bulkUpdateOrderStatusHandler);
-router.post("/", createOrder);
+router.post("/", orderCreateLimiter, idempotencyMiddleware, createOrder);
 router.post("/verify-payment", verifyRazorpayPayment);
 router.post("/:id/retry-payment", retryPaymentController);
 router.get("/:id/invoice", downloadInvoiceHandler);

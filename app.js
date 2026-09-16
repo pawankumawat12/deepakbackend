@@ -78,8 +78,11 @@ const corsOptions = {
     "Accept",
     "Cache-Control",
     "Pragma",
+    "Idempotency-Key",
+    "idempotency-key",
+    "x-idempotency-key",
   ],
-  exposedHeaders: ["Set-Cookie"],
+  exposedHeaders: ["Set-Cookie", "X-Cache"],
   maxAge: 86400,
 };
 
@@ -96,6 +99,9 @@ app.use(
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 
+const { globalApiLimiter } = require("./middleware/rateLimiter");
+app.use("/api", globalApiLimiter);
+
 // Serve static uploads with browser caching (1 day)
 app.use(
   "/uploads",
@@ -105,36 +111,50 @@ app.use(
   })
 );
 
-app.use("/api/v1/auth", authRoutes);
-app.use("/api/v1/categories", categoryRoutes);
-app.use("/api/v1/products", productRoutes);
-app.use("/api/v1/cart", cartRoutes);
-app.use("/api/v1/orders", orderRoutes);
-app.use("/api/v1/wishlist", wishlistRoutes);
-app.use("/api/v1/settings", settingsRoutes);
-app.use("/api/v1/addresses", addressRoutes);
-app.use("/api/v1/chat", chatRoutes);
-app.use("/api/v1/notifications", notificationRoutes);
-app.use("/api/v1/reviews", reviewRoutes);
-app.use("/api/v1/offers", offerRoutes);
-app.use("/api/v1/contact", contactRoutes);
-app.use("/api/v1/dashboard", dashboardRoutes);
-app.use("/api/v1/email-logs", emailLogRoutes);
-app.use("/api/v1/email-templates", emailTemplateRoutes);
-app.use("/api/v1/hero-sliders", heroSliderRoutes);
-app.use("/api/v1/why-choose-us", whyChooseUsRoutes);
-app.use("/api/v1/testimonials", testimonialRoutes);
-app.use("/api/v1/cms", cmsRoutes);
-app.use("/api/v1/inventory", inventoryRoutes);
-app.use("/api/v1/webhooks", webhookRoutes);
-app.use("/api/v1/webhook", webhookRoutes);
+// V1 API Router - Group all submodules so '/api/v1' is declared only once
+const v1Router = express.Router();
 
-// Permanent Dynamic Store QR Redirection Routes
+v1Router.use("/auth", authRoutes);
+v1Router.use("/categories", categoryRoutes);
+v1Router.use("/products", productRoutes);
+v1Router.use("/cart", cartRoutes);
+v1Router.use("/orders", orderRoutes);
+v1Router.use("/wishlist", wishlistRoutes);
+v1Router.use("/settings", settingsRoutes);
+v1Router.use("/addresses", addressRoutes);
+v1Router.use("/chat", chatRoutes);
+v1Router.use("/notifications", notificationRoutes);
+v1Router.use("/reviews", reviewRoutes);
+v1Router.use("/offers", offerRoutes);
+v1Router.use("/contact", contactRoutes);
+v1Router.use("/dashboard", dashboardRoutes);
+v1Router.use("/email-logs", emailLogRoutes);
+v1Router.use("/email-templates", emailTemplateRoutes);
+v1Router.use("/hero-sliders", heroSliderRoutes);
+v1Router.use("/why-choose-us", whyChooseUsRoutes);
+v1Router.use("/testimonials", testimonialRoutes);
+v1Router.use("/cms", cmsRoutes);
+v1Router.use("/inventory", inventoryRoutes);
+v1Router.use("/webhooks", webhookRoutes);
+v1Router.use("/webhook", webhookRoutes);
+v1Router.get("/qr", handleQrRedirect);
+v1Router.get("/qr/:code", handleQrRedirect);
+v1Router.get("/qr-destination", getPublicQrDestination);
+
+// Compatibility middleware: Auto-routes any /api/<route> to /api/v1/<route>
+app.use((req, res, next) => {
+  if (req.url.startsWith("/api/") && !req.url.startsWith("/api/v1/")) {
+    req.url = req.url.replace(/^\/api\//, "/api/v1/");
+  }
+  next();
+});
+
+// Single mount point for all v1 APIs
+app.use("/api/v1", v1Router);
+
+// Direct root QR standee redirection
 app.get("/qr", handleQrRedirect);
 app.get("/qr/:code", handleQrRedirect);
-app.get("/api/v1/qr", handleQrRedirect);
-app.get("/api/v1/qr/:code", handleQrRedirect);
-app.get("/api/v1/qr-destination", getPublicQrDestination);
 
 app.use((req, res) => {
   res.status(404).json({

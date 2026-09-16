@@ -132,7 +132,7 @@ async function postOrderMessage(req, res) {
       senderId: user.id,
       senderRole,
       senderName,
-      message: message || (attachmentType === "image" ? "📷 Photo" : "📄 Document"),
+      message: message || (attachmentType === "image" ? " Photo" : " Document"),
       attachmentUrl,
       attachmentType,
       attachmentName,

@@ -19,6 +19,11 @@ const {
   testResend,
   getStoreStatus,
   updateStoreStatus,
+  getDynamicQr,
+  updateDynamicQr,
+  downloadDynamicQr,
+  handleQrRedirect,
+  getPublicQrDestination,
 } = require("./settings.controller");
 
 const router = express.Router();
@@ -47,6 +52,11 @@ router.post("/email/test", verifyToken, isAdmin, testResend);
 // Backwards-compatible SMTP aliases
 router.get("/smtp", verifyToken, isAdmin, getSmtp);
 router.put("/smtp", verifyToken, isAdmin, updateSmtp);
-router.post("/smtp/test", verifyToken, isAdmin, testSmtp);
+// Dynamic QR Code Settings
+router.get("/qr/destination", getPublicQrDestination);
+router.get("/qr/redirect", handleQrRedirect);
+router.get("/qr", verifyToken, isAdmin, getDynamicQr);
+router.put("/qr", verifyToken, isAdmin, updateDynamicQr);
+router.get("/qr/download", verifyToken, isAdmin, downloadDynamicQr);
 
 module.exports = router;

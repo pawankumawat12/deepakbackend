@@ -23,6 +23,7 @@ const testimonialRoutes = require("./src/modules/testimonials/testimonial.routes
 const webhookRoutes = require("./src/modules/webhook/webhook.routes");
 const cmsRoutes = require("./src/modules/cmsPage/cmsPage.routes");
 const inventoryRoutes = require("./src/modules/inventory/inventory.routes");
+const { handleQrRedirect, getPublicQrDestination } = require("./src/modules/settings/settings.controller");
 const cookieParser = require("cookie-parser");
 
 const app = express();
@@ -127,6 +128,13 @@ app.use("/api/v1/cms", cmsRoutes);
 app.use("/api/v1/inventory", inventoryRoutes);
 app.use("/api/v1/webhooks", webhookRoutes);
 app.use("/api/v1/webhook", webhookRoutes);
+
+// Permanent Dynamic Store QR Redirection Routes
+app.get("/qr", handleQrRedirect);
+app.get("/qr/:code", handleQrRedirect);
+app.get("/api/v1/qr", handleQrRedirect);
+app.get("/api/v1/qr/:code", handleQrRedirect);
+app.get("/api/v1/qr-destination", getPublicQrDestination);
 
 app.use((req, res) => {
   res.status(404).json({

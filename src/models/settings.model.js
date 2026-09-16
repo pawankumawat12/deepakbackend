@@ -309,6 +309,49 @@ async function updateStoreStatusSettings(data) {
   return next;
 }
 
+const DEFAULT_DYNAMIC_QR = {
+  code: "store",
+  title: "Store Dynamic QR",
+  description: "Permanent in-store dynamic QR code",
+  destination_url: process.env.FRONTEND_URL || "http://localhost:3000",
+};
+
+async function getDynamicQrSettings() {
+  const qr = await getSetting("dynamic_qr");
+  const fallbackDestination = process.env.FRONTEND_URL || "http://localhost:3000";
+
+  if (!qr) {
+    return {
+      ...DEFAULT_DYNAMIC_QR,
+      destination_url: fallbackDestination,
+    };
+  }
+
+  return {
+    code: qr.code || DEFAULT_DYNAMIC_QR.code,
+    title: qr.title || DEFAULT_DYNAMIC_QR.title,
+    description: qr.description || DEFAULT_DYNAMIC_QR.description,
+    destination_url: qr.destination_url || fallbackDestination,
+    base_url: qr.base_url || null,
+    updated_at: qr.updated_at || null,
+  };
+}
+
+async function updateDynamicQrSettings(data) {
+  const current = await getDynamicQrSettings();
+  const next = {
+    ...current,
+    code: current.code || "store",
+    title: data.title !== undefined ? String(data.title).trim() : current.title,
+    description: data.description !== undefined ? String(data.description).trim() : current.description,
+    destination_url: data.destination_url !== undefined ? String(data.destination_url).trim() : current.destination_url,
+    base_url: data.base_url !== undefined ? (data.base_url ? String(data.base_url).trim() : null) : (current.base_url || null),
+    updated_at: new Date().toISOString(),
+  };
+  await setSetting("dynamic_qr", next);
+  return next;
+}
+
 module.exports = {
   DEFAULT_COLOR_THEMES,
   getSetting,
@@ -329,4 +372,7 @@ module.exports = {
   DEFAULT_STORE_STATUS,
   getStoreStatusSettings,
   updateStoreStatusSettings,
+  DEFAULT_DYNAMIC_QR,
+  getDynamicQrSettings,
+  updateDynamicQrSettings,
 };

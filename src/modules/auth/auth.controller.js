@@ -518,6 +518,18 @@ const sendOtp = async (req, res) => {
       });
     }
 
+    const isStorefrontClient =
+      req.headers["x-client-type"] === "storefront" ||
+      req.body?.role === "user" ||
+      req.query?.role === "user";
+
+    if (isStorefrontClient && user.role === "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Admin accounts cannot be used on the customer storefront. Please use the Admin Panel.",
+      });
+    }
+
     // Allow resending OTP if user is admin (2FA login), if an OTP was already issued, or if type/role specifies login
     const requestedRole = req.body?.role || req.query?.role;
     const requestType = req.body?.type || req.query?.type;
@@ -593,6 +605,17 @@ const verifyOtp = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "No registration found with this email address. Please create an account first.",
+      });
+    }
+
+    const isStorefrontClient =
+      req.headers["x-client-type"] === "storefront" ||
+      req.body?.role === "user";
+
+    if (isStorefrontClient && user.role === "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Admin accounts cannot log in to the customer storefront. Please use the Admin Panel.",
       });
     }
 
@@ -1249,6 +1272,13 @@ async function googleAuth(req, res) {
 
     // 2. Existing user handling
     if (user) {
+      if (user.role === "admin") {
+        return res.status(403).json({
+          success: false,
+          message: "Admin accounts cannot log in to the customer storefront. Please use the Admin Panel.",
+        });
+      }
+
       if (user.is_blocked || user.is_active === false) {
         return res.status(403).json({
           success: false,
@@ -1427,6 +1457,18 @@ const getMe = async (req, res) => {
   try {
     const user = await findUserById(req.user.id);
     if (!user) return res.status(404).json({ message: "User not found" });
+
+    const isStorefrontClient =
+      req.headers["x-client-type"] === "storefront" ||
+      req.headers["x-client-role"] === "user";
+
+    if (isStorefrontClient && user.role === "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Admin accounts cannot be used on the customer storefront. Please use customer credentials.",
+        isAdminOnStorefront: true,
+      });
+    }
 
     const token =
       (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")

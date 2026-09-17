@@ -148,10 +148,7 @@ async function postOrderMessage(req, res) {
       message: savedMessage,
     });
 
-    // 2. Send notification to counterpart only if they are NOT actively in this chat room.
-    //    If the recipient is present in order_<id> room, they already see the live message —
-    //    no notification badge is needed. If they're offline/disconnected, save it to DB
-    //    so the badge appears when they return.
+  
     if (senderRole === "customer") {
       // Notify admin only when no admin socket is in this order room
       const adminPresent = isAdminInOrderRoom(orderId);

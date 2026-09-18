@@ -27,6 +27,8 @@ function findCategories({
   limit,
   offset,
   parentCategoryId,
+  storeId,
+  includeAdmin = false,
   isActive,
   search,
   sortBy = "created_at",
@@ -39,6 +41,25 @@ function findCategories({
       query = query.whereNull("parent_category_id");
     } else {
       query = query.where({ parent_category_id: parentCategoryId });
+    }
+  }
+
+  if (storeId !== undefined) {
+    if (includeAdmin) {
+      query = query.where(function () {
+        this.whereIn(
+          "id",
+          db("store_categories").select("category_id").where({ store_id: storeId })
+        ).orWhereIn(
+          "id",
+          db("products").distinct("category_id").whereNull("store_id").where("is_active", true)
+        );
+      });
+    } else {
+      query = query.whereIn(
+        "id",
+        db("store_categories").select("category_id").where({ store_id: storeId })
+      );
     }
   }
 
@@ -61,7 +82,7 @@ function findCategories({
     .offset(offset);
 }
 
-function countCategories({ parentCategoryId, isActive, search }) {
+function countCategories({ parentCategoryId, storeId, includeAdmin = false, isActive, search }) {
   let query = db("categories");
 
   if (parentCategoryId !== undefined) {
@@ -69,6 +90,25 @@ function countCategories({ parentCategoryId, isActive, search }) {
       query = query.whereNull("parent_category_id");
     } else {
       query = query.where({ parent_category_id: parentCategoryId });
+    }
+  }
+
+  if (storeId !== undefined) {
+    if (includeAdmin) {
+      query = query.where(function () {
+        this.whereIn(
+          "id",
+          db("store_categories").select("category_id").where({ store_id: storeId })
+        ).orWhereIn(
+          "id",
+          db("products").distinct("category_id").whereNull("store_id").where("is_active", true)
+        );
+      });
+    } else {
+      query = query.whereIn(
+        "id",
+        db("store_categories").select("category_id").where({ store_id: storeId })
+      );
     }
   }
 

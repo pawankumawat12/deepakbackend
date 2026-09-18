@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken");
 const db = require("../config/db");
-const { ACCESS_SECRET } = require("../config/helper");
+const { ACCESS_SECRET, getCookieClearOptions } = require("../config/helper");
 
 // Verify access token from Authorization header or cookie
 function verifyToken(req, res, next) {
@@ -47,6 +47,19 @@ function verifyToken(req, res, next) {
           (user.is_blocked || user.is_active === false) &&
           user.role !== "admin"
         ) {
+          // Store owners are deactivated when their branch is permanently
+          // deleted. Clear browser cookies and make the client sign out.
+          if (user.role === "store_owner" && user.is_active === false) {
+            const clearOptions = getCookieClearOptions(req);
+            res.clearCookie("accessToken", clearOptions);
+            res.clearCookie("refreshToken", clearOptions);
+            return res.status(401).json({
+              success: false,
+              sessionRevoked: true,
+              message: "Your store has been deleted. You have been signed out.",
+            });
+          }
+
           // Allow profile read (/me), logout, and blocked support request
           const currentPath = req.baseUrl ? `${req.baseUrl}${req.path}` : req.path;
           const isAllowedPath =
@@ -89,7 +102,24 @@ function isAdmin(req, res, next) {
   next();
 }
 
-function optionalToken(req, res, next) {
+// Allow Admin or Store Owner
+function isAdminOrStoreOwner(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({
+      message: "Unauthorized",
+    });
+  }
+
+  if (req.user.role !== "admin" && req.user.role !== "store_owner") {
+    return res.status(403).json({
+      message: "Access denied. Admins or Store Owners only.",
+    });
+  }
+
+  next();
+}
+
+async function optionalToken(req, res, next) {
   let accessToken = null;
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith("Bearer ")) {
@@ -102,20 +132,34 @@ function optionalToken(req, res, next) {
     return next();
   }
 
-  jwt.verify(
-    accessToken,
-    ACCESS_SECRET,
-    (err, decoded) => {
-      if (!err && decoded) {
-        req.user = decoded;
-      }
-      next();
+  try {
+    const decoded = jwt.verify(accessToken, ACCESS_SECRET);
+    const user = await db("users")
+      .where({ id: decoded.id })
+      .select("id", "role", "store_id", "is_active", "is_blocked")
+      .first();
+
+    // Public catalogue endpoints must not apply a store-owner filter from an
+    // old token after that store/account has been deleted or deactivated.
+    if (user && !user.is_blocked && user.is_active !== false) {
+      req.user = {
+        ...decoded,
+        id: user.id,
+        role: user.role,
+        store_id: user.store_id,
+      };
     }
-  );
+  } catch (error) {
+    // These endpoints are public. An absent, expired, or invalid token simply
+    // receives the public catalogue rather than an authentication error.
+  }
+
+  return next();
 }
 
 module.exports = {
   verifyToken,
   isAdmin,
+  isAdminOrStoreOwner,
   optionalToken,
 };

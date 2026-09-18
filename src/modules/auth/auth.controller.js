@@ -1143,12 +1143,40 @@ async function adminLogin(req, res) {
         .status(400)
         .json({ message: "Email and password are required" });
     const admin = await findUserByEmail(email);
-    if (
-      !admin ||
-      admin.role !== "admin" ||
-      !(await bcrypt.compare(password, admin.password))
-    )
-      return res.status(404).json({ message: "Invalid admin credentials" });
+    if (!admin) {
+      return res.status(404).json({ message: "Invalid credentials" });
+    }
+
+    if (admin.role !== "admin" && admin.role !== "store_owner") {
+      return res.status(404).json({ message: "Invalid credentials" });
+    }
+
+    if (admin.role === "store_owner" && !admin.password) {
+      const approvedRequest = await db("store_login_requests")
+        .where({ user_id: admin.id, status: "approved" })
+        .where("setup_token_expires_at", ">", new Date())
+        .orderBy("created_at", "desc")
+        .first();
+
+      if (approvedRequest && approvedRequest.setup_token) {
+        return res.status(403).json({
+          success: false,
+          isApprovedPendingPassword: true,
+          setupUrl: `/store/set-password?token=${encodeURIComponent(approvedRequest.setup_token)}&email=${encodeURIComponent(admin.email)}`,
+          message: "Your access request has been approved! Redirecting to password setup...",
+        });
+      }
+
+      return res.status(403).json({
+        success: false,
+        isPendingStoreOwner: true,
+        message: "Your account is pending Admin approval. Please request access to receive your setup link.",
+      });
+    }
+
+    if (!(await bcrypt.compare(password, admin.password))) {
+      return res.status(404).json({ message: "Invalid credentials" });
+    }
 
     if (admin.is_blocked || admin.is_active === false) {
       return res.status(403).json({
@@ -1406,6 +1434,17 @@ const refreshAccessToken = async (req, res) => {
     }
 
     if (user.is_blocked || user.is_active === false) {
+      if (user.role === "store_owner" && user.is_active === false) {
+        const clearOptions = getCookieClearOptions(req);
+        res.clearCookie("accessToken", clearOptions);
+        res.clearCookie("refreshToken", clearOptions);
+        return res.status(401).json({
+          success: false,
+          sessionRevoked: true,
+          message: "Your store has been deleted. You have been signed out.",
+        });
+      }
+
       return res.status(403).json({
         success: false,
         message: user.block_reason || "Your account has been deactivated or blocked.",
@@ -2535,4 +2574,3 @@ module.exports = {
   getBlockedSupportRequests,
   resolveBlockedSupportRequest,
 };
-

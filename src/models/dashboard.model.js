@@ -46,12 +46,20 @@ const DashboardModel = {
   /**
    * Get all core KPIs with comparisons
    */
-  async getKpis() {
+  async getKpis(storeId = null) {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
     const yesterdayStart = new Date(todayStart);
     yesterdayStart.setDate(yesterdayStart.getDate() - 1);
     const yesterdayEnd = new Date(todayStart);
+
+    const baseOrders = () => {
+      let q = db("orders");
+      if (storeId) {
+        q = q.where("store_id", storeId).where("is_forwarded_to_store", true);
+      }
+      return q;
+    };
 
     const [
       totalOrdersRow,
@@ -64,16 +72,16 @@ const DashboardModel = {
       totalCustomersRow,
       totalProductsRow,
     ] = await Promise.all([
-      // Total orders (all orders placed)
-      db("orders").count("id as count").first(),
+      // Total orders
+      baseOrders().count("id as count").first(),
 
       // Total revenue (strictly realized revenue: paid online or delivered/paid COD)
-      applyRevenueOrderFilter(db("orders"))
+      applyRevenueOrderFilter(baseOrders())
         .sum("total_amount as revenue")
         .first(),
 
       // Today sales (strictly realized revenue) & today orders (all non-cancelled placed today)
-      db("orders")
+      baseOrders()
         .where("created_at", ">=", todayStart)
         .whereRaw("LOWER(status) != 'cancelled'")
         .select(
@@ -83,7 +91,7 @@ const DashboardModel = {
         .first(),
 
       // Yesterday sales (strictly realized revenue) & yesterday orders
-      db("orders")
+      baseOrders()
         .where("created_at", ">=", yesterdayStart)
         .where("created_at", "<", yesterdayEnd)
         .whereRaw("LOWER(status) != 'cancelled'")
@@ -94,22 +102,26 @@ const DashboardModel = {
         .first(),
 
       // Pending orders (Preparing, Out for Delivery, Placed, etc.)
-      db("orders")
+      baseOrders()
         .whereRaw("LOWER(status) NOT IN ('delivered', 'cancelled')")
         .count("id as count")
         .first(),
 
       // Delivered orders
-      db("orders").whereRaw("LOWER(status) = 'delivered'").count("id as count").first(),
+      baseOrders().whereRaw("LOWER(status) = 'delivered'").count("id as count").first(),
 
       // Cancelled orders
-      db("orders").whereRaw("LOWER(status) = 'cancelled'").count("id as count").first(),
+      baseOrders().whereRaw("LOWER(status) = 'cancelled'").count("id as count").first(),
 
-      // Total customers (users with role 'user' or 'customer')
-      db("users").whereIn("role", ["user", "customer"]).count("id as count").first(),
+      // Total customers (users with role 'user' or 'customer', or users who ordered from store)
+      storeId
+        ? baseOrders().countDistinct("user_id as count").first()
+        : db("users").whereIn("role", ["user", "customer"]).count("id as count").first(),
 
       // Total products
-      db("products").where("is_active", true).count("id as count").first(),
+      storeId
+        ? db("products").where("store_id", storeId).where("is_active", true).count("id as count").first()
+        : db("products").where("is_active", true).count("id as count").first(),
     ]);
 
     const totalRevenue = Number(totalRevenueRow?.revenue || 0);
@@ -148,13 +160,21 @@ const DashboardModel = {
   /**
    * Get Revenue and Order count trends for various timeframes
    */
-  async getRevenueAndOrderTrends(timeframe = "weekly") {
+  async getRevenueAndOrderTrends(timeframe = "weekly", storeId = null) {
     const now = new Date();
     const dataPoints = [];
 
+    const baseOrders = () => {
+      let q = db("orders");
+      if (storeId) {
+        q = q.where("orders.store_id", storeId).where("orders.is_forwarded_to_store", true);
+      }
+      return q;
+    };
+
     if (timeframe === "daily" || timeframe === "today") {
       const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-      const rows = await db("orders")
+      const rows = await baseOrders()
         .where("created_at", ">=", todayStart)
         .whereRaw("LOWER(status) != 'cancelled'")
         .select(
@@ -182,7 +202,7 @@ const DashboardModel = {
       oneYearAgo.setDate(1);
       oneYearAgo.setHours(0, 0, 0, 0);
 
-      const rows = await db("orders")
+      const rows = await baseOrders()
         .where("created_at", ">=", oneYearAgo)
         .whereRaw("LOWER(status) != 'cancelled'")
         .select(
@@ -220,7 +240,7 @@ const DashboardModel = {
         const dEnd = new Date(dStart);
         dEnd.setDate(dEnd.getDate() + 4);
 
-        const row = await db("orders")
+        const row = await baseOrders()
           .where("created_at", ">=", dStart)
           .where("created_at", "<", dEnd)
           .whereRaw("LOWER(status) != 'cancelled'")
@@ -247,7 +267,7 @@ const DashboardModel = {
         const dEnd = new Date(dStart);
         dEnd.setDate(dEnd.getDate() + 1);
 
-        const row = await db("orders")
+        const row = await baseOrders()
           .where("created_at", ">=", dStart)
           .where("created_at", "<", dEnd)
           .whereRaw("LOWER(status) != 'cancelled'")
@@ -272,8 +292,12 @@ const DashboardModel = {
   /**
    * Get order status breakdown
    */
-  async getOrderStatusDistribution() {
-    const rows = await db("orders")
+  async getOrderStatusDistribution(storeId = null) {
+    let query = db("orders");
+    if (storeId) {
+      query = query.where("store_id", storeId).where("is_forwarded_to_store", true);
+    }
+    const rows = await query
       .select("status")
       .count("id as count")
       .groupBy("status");
@@ -302,11 +326,15 @@ const DashboardModel = {
   /**
    * Top selling products by volume and revenue
    */
-  async getTopSellingProducts(limit = 5) {
+  async getTopSellingProducts(limit = 5, storeId = null) {
     const query = db("order_items")
       .join("orders", "order_items.order_id", "orders.id")
       .leftJoin("products", "order_items.product_id", "products.id")
       .leftJoin("categories", "products.category_id", "categories.id");
+
+    if (storeId) {
+      query.where("orders.store_id", storeId).where("orders.is_forwarded_to_store", true);
+    }
 
     applyRevenueOrderFilter(query, "orders");
 
@@ -355,11 +383,15 @@ const DashboardModel = {
   /**
    * Category-wise sales distribution
    */
-  async getCategorySalesDistribution() {
+  async getCategorySalesDistribution(storeId = null) {
     const query = db("order_items")
       .join("orders", "order_items.order_id", "orders.id")
       .leftJoin("products", "order_items.product_id", "products.id")
       .leftJoin("categories", "products.category_id", "categories.id");
+
+    if (storeId) {
+      query.where("orders.store_id", storeId).where("orders.is_forwarded_to_store", true);
+    }
 
     applyRevenueOrderFilter(query, "orders");
 
@@ -390,8 +422,13 @@ const DashboardModel = {
   /**
    * Get latest recent orders
    */
-  async getRecentOrders(limit = 6) {
-    const rows = await db("orders")
+  async getRecentOrders(limit = 6, storeId = null) {
+    let query = db("orders");
+    if (storeId) {
+      query = query.where("store_id", storeId).where("is_forwarded_to_store", true);
+    }
+
+    const rows = await query
       .select(
         "id",
         "order_number",
@@ -422,27 +459,36 @@ const DashboardModel = {
   /**
    * Get recent customer activity feed
    */
-  async getRecentActivities(limit = 6) {
+  async getRecentActivities(limit = 6, storeId = null) {
+    let ordersQuery = db("orders");
+    if (storeId) {
+      ordersQuery = ordersQuery.where("store_id", storeId).where("is_forwarded_to_store", true);
+    }
+
     const [recentOrders, recentReviews, recentInquiries] = await Promise.all([
-      db("orders")
+      ordersQuery
         .select("id", "order_number", "customer_name", "total_amount", "created_at")
         .orderBy("created_at", "desc")
-        .limit(3),
-      db("reviews")
-        .join("users", "reviews.user_id", "users.id")
-        .select("reviews.id", "users.name as user_name", "reviews.rating", "reviews.created_at")
-        .orderBy("reviews.created_at", "desc")
-        .limit(3),
-      db("contact_queries")
-        .select("id", "name", "subject", "created_at")
-        .orderBy("created_at", "desc")
-        .limit(3),
+        .limit(storeId ? limit : 3),
+      storeId
+        ? Promise.resolve([])
+        : db("reviews")
+            .join("users", "reviews.user_id", "users.id")
+            .select("reviews.id", "users.name as user_name", "reviews.rating", "reviews.created_at")
+            .orderBy("reviews.created_at", "desc")
+            .limit(3),
+      storeId
+        ? Promise.resolve([])
+        : db("contact_queries")
+            .select("id", "name", "subject", "created_at")
+            .orderBy("created_at", "desc")
+            .limit(3),
     ]);
 
     const activities = [
       ...recentOrders.map((o) => ({
         type: "order",
-        title: `Order #${o.order_number} Placed`,
+        title: `Order #${o.order_number} ${storeId ? "Assigned" : "Placed"}`,
         description: `${o.customer_name} placed an order worth ₹${Number(o.total_amount).toLocaleString("en-IN")}`,
         createdAt: o.created_at,
       })),

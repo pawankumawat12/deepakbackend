@@ -23,6 +23,7 @@ const testimonialRoutes = require("./src/modules/testimonials/testimonial.routes
 const webhookRoutes = require("./src/modules/webhook/webhook.routes");
 const cmsRoutes = require("./src/modules/cmsPage/cmsPage.routes");
 const inventoryRoutes = require("./src/modules/inventory/inventory.routes");
+const storeRoutes = require("./src/modules/store/store.routes");
 const { handleQrRedirect, getPublicQrDestination } = require("./src/modules/settings/settings.controller");
 const cookieParser = require("cookie-parser");
 
@@ -135,6 +136,7 @@ v1Router.use("/why-choose-us", whyChooseUsRoutes);
 v1Router.use("/testimonials", testimonialRoutes);
 v1Router.use("/cms", cmsRoutes);
 v1Router.use("/inventory", inventoryRoutes);
+v1Router.use("/stores", storeRoutes);
 v1Router.use("/webhooks", webhookRoutes);
 v1Router.use("/webhook", webhookRoutes);
 v1Router.get("/qr", handleQrRedirect);

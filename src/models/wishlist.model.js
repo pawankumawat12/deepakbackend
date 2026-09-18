@@ -19,6 +19,7 @@ async function getWishlistItems(userId, { page, limit } = {}) {
     ])
     .join("products", "wishlist_items.product_id", "products.id")
     .leftJoin("categories", "products.category_id", "categories.id")
+    .leftJoin("stores", "products.store_id", "stores.id")
     .where("wishlist_items.user_id", userId)
     .orderBy("wishlist_items.created_at", "desc");
 
@@ -29,7 +30,12 @@ async function getWishlistItems(userId, { page, limit } = {}) {
 
     const [items, countRow] = await Promise.all([
       query.clone().limit(l).offset(offset),
-      db("wishlist_items").where({ user_id: userId }).count("id as count").first(),
+      db("wishlist_items")
+        .join("products", "wishlist_items.product_id", "products.id")
+        .leftJoin("stores", "products.store_id", "stores.id")
+        .where("wishlist_items.user_id", userId)
+        .count("wishlist_items.id as count")
+        .first(),
     ]);
 
     const total = Number(countRow?.count || 0);
@@ -88,4 +94,3 @@ module.exports = {
   removeWishlistItem,
   clearWishlist,
 };
-

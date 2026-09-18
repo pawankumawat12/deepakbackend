@@ -1,5 +1,5 @@
 const express = require("express");
-const { verifyToken, isAdmin } = require("../../../middleware/auth.middleware");
+const { verifyToken, isAdmin, isAdminOrStoreOwner } = require("../../../middleware/auth.middleware");
 const { uploadImage } = require("../../../middleware/upload");
 const {
   getTheme,
@@ -55,8 +55,8 @@ router.put("/smtp", verifyToken, isAdmin, updateSmtp);
 // Dynamic QR Code Settings
 router.get("/qr/destination", getPublicQrDestination);
 router.get("/qr/redirect", handleQrRedirect);
-router.get("/qr", verifyToken, isAdmin, getDynamicQr);
+router.get("/qr", verifyToken, isAdminOrStoreOwner, getDynamicQr);
 router.put("/qr", verifyToken, isAdmin, updateDynamicQr);
-router.get("/qr/download", verifyToken, isAdmin, downloadDynamicQr);
+router.get("/qr/download", verifyToken, isAdminOrStoreOwner, downloadDynamicQr);
 
 module.exports = router;

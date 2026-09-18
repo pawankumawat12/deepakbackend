@@ -1,5 +1,5 @@
 const express = require("express");
-const { verifyToken, isAdmin } = require("../../../middleware/auth.middleware");
+const { verifyToken, isAdmin, isAdminOrStoreOwner } = require("../../../middleware/auth.middleware");
 const {
   createOrder,
   getUserOrders,
@@ -12,6 +12,7 @@ const {
   refundOrderController,
   acceptOrderController,
   rejectOrderController,
+  forwardOrderToStoreHandler,
   verifyRazorpayPayment,
   retryPaymentController,
   bulkUpdateOrderStatusHandler,
@@ -39,14 +40,17 @@ router.get("/", getUserOrders);
 router.get("/:id", getOrderDetails);
 router.post("/:id/cancel", cancelUserOrder);
 
-// Admin order management routes
-router.get("/admin/all", isAdmin, getAdminOrders);
-router.patch("/:id/status", isAdmin, updateStatus);
-router.post("/:id/accept", isAdmin, acceptOrderController);
-router.post("/:id/reject", isAdmin, rejectOrderController);
+// Admin & Store Owner order management routes
+router.get("/admin/all", isAdminOrStoreOwner, getAdminOrders);
+router.patch("/:id/status", isAdminOrStoreOwner, updateStatus);
+router.post("/:id/accept", isAdminOrStoreOwner, acceptOrderController);
+router.post("/:id/reject", isAdminOrStoreOwner, rejectOrderController);
+router.patch("/items/:itemId/produced", isAdminOrStoreOwner, markItemProduced);
+
+// Admin-only order routing and financials
+router.post("/:id/forward-to-store", isAdmin, forwardOrderToStoreHandler);
 router.patch("/:id/payment-status", isAdmin, updatePaymentStatusController);
 router.post("/:id/refund", isAdmin, refundOrderController);
-router.patch("/items/:itemId/produced", isAdmin, markItemProduced);
 
 module.exports = router;
 

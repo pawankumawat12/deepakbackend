@@ -10,8 +10,16 @@ const {
   updateOrderPaymentStatus,
   acceptOrder,
   rejectOrder,
+  forwardOrderToStore,
 } = require("../../models/order.model");
 const Crypto = require("crypto");
+
+async function getStoreIdForUser(user) {
+  if (!user) return null;
+  if (user.store_id) return user.store_id;
+  const store = await db("stores").where({ owner_id: user.id }).first();
+  return store ? store.id : null;
+}
 
 const Address = require("../../models/address.model");
 const notificationModel = require("../../models/notification.model");
@@ -672,7 +680,22 @@ async function getOrderDetails(req, res) {
       });
     }
 
-    const order = await findOrderById(orderId, req.user.role === "admin" ? null : req.user.id);
+    let order;
+    if (req.user.role === "admin") {
+      order = await findOrderById(orderId, null);
+    } else if (req.user.role === "store_owner") {
+      const userStoreId = await getStoreIdForUser(req.user);
+      order = await findOrderById(orderId, null);
+      if (!order || order.store_id !== userStoreId || !order.is_forwarded_to_store) {
+        return res.status(404).json({
+          success: false,
+          message: "Order not found or not dispatched to your store.",
+        });
+      }
+    } else {
+      order = await findOrderById(orderId, req.user.id);
+    }
+
     if (!order) {
       return res.status(404).json({
         success: false,
@@ -696,13 +719,48 @@ async function getOrderDetails(req, res) {
 
 async function getAdminOrders(req, res) {
   try {
-    const { page, limit, status, search } = req.query;
-    const result = await findAllOrders({ page, limit, status, search });
+    const { page, limit, status, search, store_id, storeId } = req.query;
+    const rawStoreId = store_id || storeId;
+    let targetStoreId = rawStoreId ? Number(rawStoreId) : undefined;
+    let isForwardedOnly = false;
+
+    if (req.user.role === "store_owner") {
+      const userStoreId = await getStoreIdForUser(req.user);
+      if (!userStoreId) {
+        return res.status(200).json({
+          success: true,
+          message: "No store assigned to this account",
+          data: [],
+          pagination: { total: 0, page: 1, limit: 20, totalPages: 1 },
+          stats: {
+            totalOrders: 0,
+            totalAmount: 0,
+            deliveredOrders: 0,
+            cancelledOrders: 0,
+            pendingOrders: 0,
+            deliveredAmount: 0,
+          },
+        });
+      }
+      targetStoreId = userStoreId;
+      isForwardedOnly = true; // Store owners ONLY see orders forwarded to their store!
+    }
+
+    const result = await findAllOrders({
+      page,
+      limit,
+      status,
+      search,
+      storeId: targetStoreId,
+      isForwardedOnly,
+    });
+
     return res.status(200).json({
       success: true,
       message: "Orders fetched successfully",
       data: result.orders,
       pagination: result.pagination,
+      stats: result.stats,
     });
   } catch (error) {
     console.error("Admin get orders error:", error);
@@ -722,6 +780,17 @@ async function updateStatus(req, res) {
         success: false,
         message: "order ID and status are required",
       });
+    }
+
+    if (req.user.role === "store_owner") {
+      const userStoreId = await getStoreIdForUser(req.user);
+      const existing = await findOrderById(orderId, null);
+      if (!existing || existing.store_id !== userStoreId || !existing.is_forwarded_to_store) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied: order does not belong to your store or is not dispatched.",
+        });
+      }
     }
 
     const updated = await updateOrderStatus(orderId, status);
@@ -769,6 +838,17 @@ async function acceptOrderController(req, res) {
   try {
     const orderId = Number(req.params.id);
     const { notes } = req.body || {};
+
+    if (req.user.role === "store_owner") {
+      const userStoreId = await getStoreIdForUser(req.user);
+      const existing = await findOrderById(orderId, null);
+      if (!existing || existing.store_id !== userStoreId || !existing.is_forwarded_to_store) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied: order does not belong to your store or is not dispatched.",
+        });
+      }
+    }
 
     const updated = await acceptOrder(orderId, { notes });
 
@@ -827,6 +907,17 @@ async function rejectOrderController(req, res) {
     const orderId = Number(req.params.id);
     const { cancelReason = "Order rejected by store" } = req.body || {};
 
+    if (req.user.role === "store_owner") {
+      const userStoreId = await getStoreIdForUser(req.user);
+      const existing = await findOrderById(orderId, null);
+      if (!existing || existing.store_id !== userStoreId || !existing.is_forwarded_to_store) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied: order does not belong to your store or is not dispatched.",
+        });
+      }
+    }
+
     const updated = await rejectOrder(orderId, { cancelReason });
 
     // Notify customer in real-time
@@ -879,6 +970,58 @@ async function rejectOrderController(req, res) {
   }
 }
 
+async function forwardOrderToStoreHandler(req, res) {
+  try {
+    const orderId = Number(req.params.id);
+    const { store_id } = req.body || {};
+
+    if (!orderId) {
+      return res.status(400).json({ success: false, message: "Valid Order ID is required." });
+    }
+
+    const updated = await forwardOrderToStore(orderId, store_id ? Number(store_id) : null);
+
+    // Notify Store Owner in real-time
+    if (updated && updated.store_id) {
+      try {
+        const store = await db("stores").where({ id: updated.store_id }).first();
+        if (store && store.owner_id) {
+          await notificationModel.createNotification({
+            userId: store.owner_id,
+            role: "store_owner",
+            type: "order_forwarded",
+            title: `New Store Order Dispatched! 📦`,
+            message: `Order #${updated.order_number || updated.id} has been dispatched to your store.`,
+            orderId: updated.id,
+            dataJson: { orderId: updated.id, orderNumber: updated.order_number },
+          });
+
+          emitToUser(store.owner_id, "new_store_order", {
+            order: updated,
+            message: `New order #${updated.order_number || updated.id} dispatched to your store!`,
+          });
+        }
+      } catch (notifyErr) {
+        console.warn("Notification error when forwarding to store:", notifyErr.message);
+      }
+    }
+
+    emitToAdmin("admin_order_updated", { order: updated });
+
+    return res.status(200).json({
+      success: true,
+      message: `Order #${updated.order_number || updated.id} forwarded to store successfully.`,
+      data: updated,
+    });
+  } catch (error) {
+    console.error("Forward order to store error:", error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to forward order to store.",
+    });
+  }
+}
+
 async function markItemProduced(req, res) {
   try {
     const itemId = Number(req.params.itemId);
@@ -888,6 +1031,17 @@ async function markItemProduced(req, res) {
         success: false,
         message: "Invalid item ID",
       });
+    }
+
+    if (req.user.role === "store_owner") {
+      const userStoreId = await getStoreIdForUser(req.user);
+      const item = await db("order_items").where({ id: itemId }).first();
+      if (!item || (item.store_id && item.store_id !== userStoreId)) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied: item does not belong to your store.",
+        });
+      }
     }
 
     const updated = await updateItemProductionStatus(itemId, productionStatus);
@@ -1604,6 +1758,7 @@ module.exports = {
   refundOrderController,
   acceptOrderController,
   rejectOrderController,
+  forwardOrderToStoreHandler,
   verifyRazorpayPayment,
   retryPaymentController,
   bulkUpdateOrderStatusHandler,

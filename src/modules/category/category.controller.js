@@ -47,6 +47,22 @@ async function listCategories(req, res) {
       });
     }
 
+    const isStorefront =
+      req.headers["x-client-type"] === "storefront" ||
+      req.query.include_admin === "true" ||
+      req.query.include_admin === true ||
+      req.query.scope === "storefront";
+
+    if (isStorefront) {
+      filters.includeAdmin = true;
+    }
+
+    if (req.user && req.user.role === "store_owner") {
+      filters.storeId = req.user.store_id;
+    } else if (req.query.store_id) {
+      filters.storeId = Number(req.query.store_id);
+    }
+
     const [categories, total] = await Promise.all([
       findCategories({ page, limit, offset, ...filters }),
       countCategories(filters),

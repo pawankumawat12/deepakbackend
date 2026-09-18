@@ -7,8 +7,14 @@ const {
   removeCartItem,
   clearCart,
 } = require("../../models/cart.model");
-const { getAddressesByUserId, getAddressById } = require("../../models/address.model");
-const { calculateCartAndOrderPricing, roundCurrency } = require("../../utils/pricing.util");
+const {
+  getAddressesByUserId,
+  getAddressById,
+} = require("../../models/address.model");
+const {
+  calculateCartAndOrderPricing,
+  roundCurrency,
+} = require("../../utils/pricing.util");
 
 function parsePositiveInteger(value) {
   const parsed = Number(value);
@@ -38,12 +44,20 @@ function formatCartItems(rawItems) {
     const availabilityType = item.availability_type || "IN_STOCK";
     const isMadeToOrder = availabilityType === "MADE_TO_ORDER";
 
+    // Store active/closure check — only applies to store-specific products (store_id set)
+    const storeIsClosed = item.store_id ? item.store_is_open === false : false;
+    const storeIsInactive = item.store_id
+      ? item.store_is_active === false
+      : false;
+
     const isOutOfStock = !item.is_active || (!isMadeToOrder && stock <= 0);
     const exceedsStock = !isMadeToOrder && quantity > stock;
     const isMaxStockReached = !isMadeToOrder && quantity >= stock && stock > 0;
 
     let stockMessage = null;
-    if (!item.is_active) {
+    if (storeIsInactive || storeIsClosed) {
+      stockMessage = "Not available right now";
+    } else if (!item.is_active) {
       stockMessage = "Unavailable";
     } else if (isMadeToOrder) {
       stockMessage = "Made to Order";
@@ -71,11 +85,14 @@ function formatCartItems(rawItems) {
       images,
       image: images[0] || null,
       is_active: Boolean(item.is_active),
+      store_id: item.store_id || null,
+      store_name: item.store_name || null,
+      store_is_closed: storeIsClosed,
       category_id: item.category_id,
       category_name: item.category_name || "Menu",
       quantity,
       itemTotal,
-      isOutOfStock,
+      isOutOfStock: isOutOfStock || storeIsClosed,
       exceedsStock,
       isMaxStockReached,
       stockMessage,
@@ -92,7 +109,8 @@ function buildCartSummary(pricing, enrichedItems) {
 
   return {
     totalItems: pricing.total_items,
-    totalProductsDelivered: pricing.total_products_delivered ?? pricing.total_items,
+    totalProductsDelivered:
+      pricing.total_products_delivered ?? pricing.total_items,
     totalQuantity: pricing.total_items,
     cartQuantity: pricing.paid_items ?? pricing.total_items,
     normalCartQuantity: pricing.paid_items ?? pricing.total_items,
@@ -157,7 +175,8 @@ async function respondWithCart(res, userId, message = "Success", options = {}) {
   }
   if (!deliveryAddress) {
     const userAddresses = await getAddressesByUserId(userId);
-    deliveryAddress = userAddresses.find((a) => a.is_default) || userAddresses[0] || null;
+    deliveryAddress =
+      userAddresses.find((a) => a.is_default) || userAddresses[0] || null;
   }
 
   // Calculate pricing completely on the backend
@@ -189,11 +208,16 @@ async function getCart(req, res) {
     const addressId = req.query.addressId ? Number(req.query.addressId) : null;
     const paymentMethod = req.query.paymentMethod || "Cash on Delivery";
     const offerCode = req.query.offerCode || req.query.code || null;
-    return await respondWithCart(res, req.user.id, "Cart fetched successfully", {
-      addressId,
-      paymentMethod,
-      offerCode,
-    });
+    return await respondWithCart(
+      res,
+      req.user.id,
+      "Cart fetched successfully",
+      {
+        addressId,
+        paymentMethod,
+        offerCode,
+      }
+    );
   } catch (error) {
     console.error("Get cart error:", error);
     return res.status(500).json({ success: false, message: "Server error" });
@@ -218,6 +242,20 @@ async function addCartItem(req, res) {
         success: false,
         message: "This product is currently not available",
       });
+    }
+
+    // Block add-to-cart if the product belongs to an INACTIVE or CLOSED store
+    if (product.store_id) {
+      const store = await db("stores").where({ id: product.store_id }).first();
+      if (store && (!store.is_active || !store.is_open)) {
+        return res.status(400).json({
+          success: false,
+          message: "This product is not available right now. Please try again later.",
+          storeClosed: !store.is_open,
+          storeInactive: !store.is_active,
+          storeName: store.name || null,
+        });
+      }
     }
 
     const isMadeToOrder = product.availability_type === "MADE_TO_ORDER";
@@ -280,12 +318,35 @@ async function updateCartItem(req, res) {
       return await respondWithCart(res, req.user.id, "Item removed from cart");
     }
 
+    const current = await findCartItem(req.user.id, productId);
+    const currentQty = Number(current?.quantity) || 0;
+
+    // If user is reducing quantity or removing items, ALWAYS allow it!
+    if (quantity < currentQty) {
+      await upsertCartItem(req.user.id, productId, quantity);
+      return await respondWithCart(res, req.user.id, "Cart item updated");
+    }
+
     const product = await findProductById(productId);
     if (!product || !product.is_active) {
       return res.status(404).json({
         success: false,
         message: "Product is not available",
       });
+    }
+
+    // Only block if INCREASING quantity for an INACTIVE or CLOSED store
+    if (product.store_id) {
+      const store = await db("stores").where({ id: product.store_id }).first();
+      if (store && (!store.is_active || !store.is_open)) {
+        return res.status(400).json({
+          success: false,
+          message: "This product is not available right now.",
+          storeClosed: !store.is_open,
+          storeInactive: !store.is_active,
+          storeName: store.name || null,
+        });
+      }
     }
 
     const isMadeToOrder = product.availability_type === "MADE_TO_ORDER";
@@ -510,7 +571,10 @@ async function mergeGuestCart(req, res) {
     });
 
     let message = "Cart merged successfully";
-    if (mergeReport.adjustedItems.length > 0 || mergeReport.outOfStockItems.length > 0) {
+    if (
+      mergeReport.adjustedItems.length > 0 ||
+      mergeReport.outOfStockItems.length > 0
+    ) {
       message = "Cart merged with stock adjustments";
     }
 
@@ -519,7 +583,9 @@ async function mergeGuestCart(req, res) {
     });
   } catch (error) {
     console.error("Merge cart error:", error);
-    return res.status(500).json({ success: false, message: "Failed to merge cart" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to merge cart" });
   }
 }
 

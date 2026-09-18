@@ -7,6 +7,22 @@ function generateOrderNumber() {
   return `SFC-${timestamp}${random}`;
 }
 
+let orderStoreColumnsChecked = false;
+async function ensureOrderStoreColumns() {
+  if (orderStoreColumnsChecked) return;
+  try {
+    await db.raw(`
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS store_id INTEGER;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_forwarded_to_store BOOLEAN DEFAULT FALSE;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS forwarded_at TIMESTAMPTZ;
+      ALTER TABLE order_items ADD COLUMN IF NOT EXISTS store_id INTEGER;
+    `);
+    orderStoreColumnsChecked = true;
+  } catch (err) {
+    console.warn("[Order Model] Schema self-heal notice:", err.message);
+  }
+}
+
 //order transaction create
 async function createOrderWithTransaction({
   userId,
@@ -23,6 +39,7 @@ async function createOrderWithTransaction({
   offerCode = null,
   finalizeOrder = true,
 }) {
+  await ensureOrderStoreColumns();
   return await db.transaction(async (trx) => {
     const rawCartItems = await trx("cart_items")
       .select([
@@ -36,6 +53,7 @@ async function createOrderWithTransaction({
         "products.images",
         "products.is_active",
         "products.category_id",
+        "products.store_id",
       ])
       .join("products", "cart_items.product_id", "products.id")
       .where("cart_items.user_id", userId)
@@ -65,6 +83,24 @@ async function createOrderWithTransaction({
         );
         err.statusCode = 400;
         throw err;
+      }
+
+      // Block order if the product belongs to an INACTIVE or CLOSED store
+      if (item.store_id) {
+        const storeForItem = await trx("stores")
+          .where({ id: item.store_id })
+          .select("id", "name", "is_open", "is_active")
+          .first();
+        if (
+          storeForItem &&
+          (storeForItem.is_active === false || storeForItem.is_open === false)
+        ) {
+          const err = new Error(
+            `"${item.name}" is not available right now. Please remove it from your cart and try again.`
+          );
+          err.statusCode = 400;
+          throw err;
+        }
       }
 
       const requiredStock = item.total_quantity || item.quantity;
@@ -101,13 +137,39 @@ async function createOrderWithTransaction({
       throw err;
     }
 
-    // 6. GENERATE ORDER NUMBER
+    // 6. DETERMINE STORE ASSOCIATION & AUTO-FORWARD STATUS
+    const orderStoreId =
+      enrichedItems.find((i) => i.store_id != null)?.store_id || null;
+
+    let isForwardedToStore = false;
+    let forwardedAt = null;
+
+    if (orderStoreId) {
+      try {
+        const storeRecord = await trx("stores")
+          .where({ id: orderStoreId })
+          .select("auto_forward_orders")
+          .first();
+
+        if (storeRecord && storeRecord.auto_forward_orders === true) {
+          isForwardedToStore = true;
+          forwardedAt = trx.fn.now();
+        }
+      } catch (storeErr) {
+        console.warn("[Order Model] Store auto-forward lookup warning:", storeErr.message);
+      }
+    }
+
+    // 7. GENERATE ORDER NUMBER
     const orderNumber = generateOrderNumber();
 
-    // 7. CREATE LOCAL ORDER
+    // 8. CREATE LOCAL ORDER
     const [order] = await trx("orders")
       .insert({
         order_number: orderNumber,
+        store_id: orderStoreId,
+        is_forwarded_to_store: isForwardedToStore,
+        forwarded_at: forwardedAt,
 
         user_id: userId,
 
@@ -229,6 +291,8 @@ async function createOrderWithTransaction({
       orderItemsToInsert.push({
         order_id: order.id,
 
+        store_id: item.store_id || orderStoreId,
+
         product_id: item.product_id,
 
         product_name: item.name,
@@ -263,7 +327,7 @@ async function createOrderWithTransaction({
       });
     }
 
-    // Safely check if order_items has paid_quantity column
+    // Safely check if order_items has paid_quantity and store_id columns
     try {
       const hasPaidQtyCol = await trx.schema.hasColumn(
         "order_items",
@@ -274,6 +338,12 @@ async function createOrderWithTransaction({
           delete row.paid_quantity;
           delete row.free_quantity;
           delete row.bogo_details_json;
+        }
+      }
+      const hasStoreIdCol = await trx.schema.hasColumn("order_items", "store_id");
+      if (!hasStoreIdCol) {
+        for (const row of orderItemsToInsert) {
+          delete row.store_id;
         }
       }
     } catch {}
@@ -473,15 +543,18 @@ async function findOrdersByUser(userId, { page = 1, limit = 10, status = null } 
 }
 
 async function findOrderById(orderId, userId = null) {
-  let query = db("orders");
+  await ensureOrderStoreColumns();
+  let query = db("orders as o")
+    .leftJoin("stores as s", "o.store_id", "s.id")
+    .select("o.*", "s.name as store_name");
   const trimmed = String(orderId || "").trim();
   if (/^\d+$/.test(trimmed)) {
-    query = query.where({ id: Number(trimmed) });
+    query = query.where("o.id", Number(trimmed));
   } else {
-    query = query.where({ order_number: trimmed });
+    query = query.where("o.order_number", trimmed);
   }
   if (userId) {
-    query = query.where({ user_id: userId });
+    query = query.where("o.user_id", userId);
   }
   const order = await query.first();
   if (!order) return null;
@@ -496,32 +569,65 @@ async function findOrderById(orderId, userId = null) {
   };
 }
 
-async function findAllOrders({ page = 1, limit = 20, status, search }) {
+async function findAllOrders({ page = 1, limit = 20, status, search, storeId, isForwardedOnly = false }) {
+  await ensureOrderStoreColumns();
   const p = Math.max(1, Number(page) || 1);
   const l = Math.max(1, Math.min(100, Number(limit) || 20));
   const offset = (p - 1) * l;
-  let query = db("orders");
+  let query = db("orders as o")
+    .leftJoin("stores as s", "o.store_id", "s.id")
+    .select("o.*", "s.name as store_name");
+
+  if (storeId) {
+    query = query.where("o.store_id", storeId);
+  }
+
+  if (isForwardedOnly) {
+    query = query.where("o.is_forwarded_to_store", true);
+  }
 
   if (status && status !== "all" && status !== "") {
-    query = query.where({ status });
+    query = query.where("o.status", status);
   }
 
   if (search && String(search).trim()) {
     const s = `%${String(search).trim()}%`;
     query = query.where(function () {
-      this.whereILike("order_number", s)
-        .orWhereILike("customer_name", s)
-        .orWhereILike("customer_email", s)
-        .orWhereILike("customer_phone", s);
+      this.whereILike("o.order_number", s)
+        .orWhereILike("o.customer_name", s)
+        .orWhereILike("o.customer_email", s)
+        .orWhereILike("o.customer_phone", s)
+        .orWhereILike("s.name", s);
     });
   }
 
-  const [orders, countRow] = await Promise.all([
-    query.clone().orderBy("created_at", "desc").limit(l).offset(offset),
-    query.clone().count("id as count").first(),
+  const [orders, countRow, statsRow] = await Promise.all([
+    query.clone().orderBy("o.created_at", "desc").limit(l).offset(offset),
+    query.clone().clearSelect().clearOrder().count("o.id as count").first(),
+    query
+      .clone()
+      .clearSelect()
+      .clearOrder()
+      .select([
+        db.raw("COUNT(o.id)::int as total_orders"),
+        db.raw("COALESCE(SUM(o.total_amount), 0)::float as total_amount"),
+        db.raw("COUNT(CASE WHEN o.status = 'Delivered' THEN 1 END)::int as delivered_orders"),
+        db.raw("COUNT(CASE WHEN o.status = 'Cancelled' THEN 1 END)::int as cancelled_orders"),
+        db.raw("COUNT(CASE WHEN o.status NOT IN ('Delivered', 'Cancelled') THEN 1 END)::int as pending_orders"),
+        db.raw("COALESCE(SUM(CASE WHEN o.status = 'Delivered' THEN o.total_amount END), 0)::float as delivered_amount"),
+      ])
+      .first(),
   ]);
 
   const total = Number(countRow?.count || 0);
+  const stats = {
+    totalOrders: Number(statsRow?.total_orders || total),
+    totalAmount: Number(statsRow?.total_amount || 0),
+    deliveredOrders: Number(statsRow?.delivered_orders || 0),
+    cancelledOrders: Number(statsRow?.cancelled_orders || 0),
+    pendingOrders: Number(statsRow?.pending_orders || 0),
+    deliveredAmount: Number(statsRow?.delivered_amount || 0),
+  };
 
   if (!orders.length) {
     return {
@@ -532,6 +638,7 @@ async function findAllOrders({ page = 1, limit = 20, status, search }) {
         limit: l,
         totalPages: Math.ceil(total / l) || 1,
       },
+      stats,
     };
   }
 
@@ -557,7 +664,40 @@ async function findAllOrders({ page = 1, limit = 20, status, search }) {
       limit: l,
       totalPages: Math.ceil(total / l) || 1,
     },
+    stats,
   };
+}
+
+async function forwardOrderToStore(orderId, storeId = null) {
+  await ensureOrderStoreColumns();
+  const order = await db("orders").where({ id: orderId }).first();
+  if (!order) {
+    const err = new Error("Order not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const targetStoreId = storeId || order.store_id;
+  if (!targetStoreId) {
+    const err = new Error("No store assigned to this order. Please select a store first.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  await db("orders")
+    .where({ id: orderId })
+    .update({
+      store_id: targetStoreId,
+      is_forwarded_to_store: true,
+      forwarded_at: db.fn.now(),
+      updated_at: db.fn.now(),
+    });
+
+  await db("order_items")
+    .where({ order_id: orderId })
+    .update({ store_id: targetStoreId });
+
+  return findOrderById(orderId);
 }
 
 async function updateOrderStatus(orderId, status) {
@@ -794,5 +934,6 @@ module.exports = {
   updateOrderPaymentStatus,
   acceptOrder,
   rejectOrder,
+  forwardOrderToStore,
   getOrderChatStatus,
 };

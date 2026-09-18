@@ -15,6 +15,7 @@ const PRODUCT_COLUMNS = [
   "products.availability_type",
   "products.images",
   "products.category_id",
+  "products.store_id",
   "products.is_active",
   "products.image_keys",
   "products.storage_provider",
@@ -71,6 +72,9 @@ function findProducts({
   limit,
   offset,
   categoryId,
+  storeId,
+  includeAdmin = false,
+  adminOnly = false,
   isActive,
   availabilityType,
   search,
@@ -93,6 +97,21 @@ function findProducts({
 
   if (categoryId !== undefined) {
     query = query.where("products.category_id", categoryId);
+  }
+
+  if (adminOnly) {
+    // Show only products created by admin (store_id is null)
+    query = query.whereNull("products.store_id");
+  } else if (storeId !== undefined) {
+    if (includeAdmin) {
+      // In storefront, show products belonging to the store AND admin master products (store_id is null)
+      query = query.where(function () {
+        this.where("products.store_id", storeId).orWhereNull("products.store_id");
+      });
+    } else {
+      // In admin panel, store owners manage strictly products created for their own branch
+      query = query.where("products.store_id", storeId);
+    }
   }
 
   if (isActive !== undefined) {
@@ -119,11 +138,23 @@ function findProducts({
     .offset(offset);
 }
 
-function countProducts({ categoryId, isActive, availabilityType, search }) {
+function countProducts({ categoryId, storeId, includeAdmin = false, adminOnly = false, isActive, availabilityType, search }) {
   let query = db("products");
 
   if (categoryId !== undefined) {
     query = query.where({ category_id: categoryId });
+  }
+
+  if (adminOnly) {
+    query = query.whereNull("products.store_id");
+  } else if (storeId !== undefined) {
+    if (includeAdmin) {
+      query = query.where(function () {
+        this.where("products.store_id", storeId).orWhereNull("products.store_id");
+      });
+    } else {
+      query = query.where({ store_id: storeId });
+    }
   }
 
   if (isActive !== undefined) {
@@ -144,7 +175,7 @@ function countProducts({ categoryId, isActive, availabilityType, search }) {
   }
 
   return query
-    .count("id as count")
+    .count("products.id as count")
     .first()
     .then((row) => Number(row.count || 0));
 }
@@ -152,7 +183,7 @@ function countProducts({ categoryId, isActive, availabilityType, search }) {
 function countProductsByCategory(categoryId) {
   return db("products")
     .where({ category_id: categoryId })
-    .count("id as count")
+    .count("products.id as count")
     .first()
     .then((row) => Number(row.count || 0));
 }
@@ -200,10 +231,15 @@ function deleteProduct(id) {
   return db("products").where({ id }).del();
 }
 
-function bulkUpdateProductStatus(ids, isActive) {
+function bulkUpdateProductStatus(ids, isActive, storeId) {
   if (!Array.isArray(ids) || ids.length === 0) return Promise.resolve([]);
-  return db("products")
-    .whereIn("id", ids)
+  let query = db("products").whereIn("id", ids);
+
+  if (storeId !== undefined) {
+    query = query.where("store_id", storeId);
+  }
+
+  return query
     .update({ is_active: Boolean(isActive), updated_at: new Date() })
     .returning(["id", "name", "is_active"]);
 }
@@ -215,7 +251,15 @@ function bulkDeleteProducts(ids) {
 
 function findProductsByIds(ids) {
   if (!Array.isArray(ids) || ids.length === 0) return Promise.resolve([]);
-  return db("products").whereIn("id", ids).select(["id", "name", "images", "image_keys"]);
+  return db("products")
+    .whereIn("products.id", ids)
+    .select([
+      "products.id",
+      "products.name",
+      "products.images",
+      "products.image_keys",
+      "products.store_id",
+    ]);
 }
 
 module.exports = {
@@ -233,4 +277,3 @@ module.exports = {
   attachOffersToProducts,
   getApplicableOffersForProduct,
 };
-

@@ -1,3 +1,4 @@
+const db = require("../../../config/db");
 const {
   parsePagination,
   buildPaginationMeta,
@@ -60,6 +61,40 @@ async function listProducts(req, res) {
       }
     }
 
+    const isStorefront =
+      req.headers["x-client-type"] === "storefront" ||
+      req.query.include_admin === "true" ||
+      req.query.include_admin === true ||
+      req.query.scope === "storefront";
+
+    if (isStorefront) {
+      filters.includeAdmin = true;
+    }
+
+    const adminOnly =
+      req.query.admin_only === "true" ||
+      req.query.admin_only === true;
+
+    if (adminOnly) {
+      filters.adminOnly = true;
+    }
+
+    if (req.user && req.user.role === "store_owner") {
+      const storeId = parseIdParam(req.user.store_id);
+      if (!storeId) {
+        return res.status(403).json({
+          message: "No store is associated with your account. Contact administrator.",
+        });
+      }
+      filters.storeId = storeId;
+    } else if (req.query.store_id !== undefined) {
+      const storeId = parseIdParam(req.query.store_id);
+      if (!storeId) {
+        return res.status(400).json({ message: "Invalid store ID" });
+      }
+      filters.storeId = storeId;
+    }
+
     const [products, total, activeOffers] = await Promise.all([
       findProducts({ page, limit, offset, ...filters }),
       countProducts(filters),
@@ -92,6 +127,16 @@ async function getProductById(req, res) {
     const product = await findProductById(id);
     if (!product) {
       return res.status(404).json({ message: "Product not found" });
+    }
+
+    if (req.user && req.user.role === "store_owner") {
+      const storeId = parseIdParam(req.user.store_id);
+      // Store owners can view their store's products as well as master admin products (store_id is null)
+      if (product.store_id !== null && Number(product.store_id) !== storeId) {
+        return res.status(403).json({
+          message: "You can only view products belonging to your store or admin products.",
+        });
+      }
     }
 
     if (!Array.isArray(product.offers)) {
@@ -157,6 +202,28 @@ async function createProductHandler(req, res) {
       });
     }
 
+    // Strict category restriction for Store Owner
+    if (req.user && req.user.role === "store_owner") {
+      const storeId = req.user.store_id;
+      if (!storeId) {
+        return res.status(403).json({
+          message: "No store is associated with your account. Contact administrator.",
+        });
+      }
+
+      const isCategoryAssigned = await db("store_categories")
+        .where({ store_id: storeId, category_id: data.category_id })
+        .first();
+
+      if (!isCategoryAssigned) {
+        return res.status(403).json({
+          message: "You can only add products to the categories assigned to your store by the administrator.",
+        });
+      }
+
+      data.store_id = storeId;
+    }
+
     if (req.files && req.files.length > 0) {
       uploadedResults = await Promise.all(
         req.files.map((file) => uploadFile(file, { folder: "products" }))
@@ -211,6 +278,15 @@ async function updateProductHandler(req, res) {
       return res.status(404).json({
         message: "Product not found",
       });
+    }
+
+    if (req.user && req.user.role === "store_owner") {
+      const storeId = parseIdParam(req.user.store_id);
+      if (!storeId || Number(existingProduct.store_id) !== storeId) {
+        return res.status(403).json({
+          message: "You can only edit products belonging to your store.",
+        });
+      }
     }
 
     const {
@@ -280,6 +356,17 @@ async function updateProductHandler(req, res) {
         return res.status(400).json({
           message: "Category not found",
         });
+      }
+
+      if (req.user && req.user.role === "store_owner") {
+        const isAllowed = await db("store_categories")
+          .where({ store_id: req.user.store_id, category_id: data.category_id })
+          .first();
+        if (!isAllowed) {
+          return res.status(403).json({
+            message: "You can only assign products to categories assigned to your store.",
+          });
+        }
       }
     }
 
@@ -353,6 +440,15 @@ async function deleteProductHandler(req, res) {
       return res.status(404).json({ message: "Product not found" });
     }
 
+    if (req.user && req.user.role === "store_owner") {
+      const storeId = parseIdParam(req.user.store_id);
+      if (!storeId || Number(existingProduct.store_id) !== storeId) {
+        return res.status(403).json({
+          message: "You can only delete products belonging to your store.",
+        });
+      }
+    }
+
     // Automatically remove product images from Cloudinary to prevent orphaned files
     if (Array.isArray(existingProduct.images) && existingProduct.images.length > 0) {
       deleteFiles(existingProduct.images).catch((err) =>
@@ -381,7 +477,35 @@ async function bulkUpdateProductStatusHandler(req, res) {
       return res.status(400).json({ message: "isActive boolean is required" });
     }
 
-    const updatedProducts = await bulkUpdateProductStatus(ids, isActive);
+    const productIds = [...new Set(ids.map(parseIdParam))];
+    if (productIds.some((id) => !id)) {
+      return res.status(400).json({ message: "ids must contain only valid product IDs" });
+    }
+
+    let storeId;
+    if (req.user.role === "store_owner") {
+      storeId = parseIdParam(req.user.store_id);
+      if (!storeId) {
+        return res.status(403).json({
+          message: "No store is associated with your account. Contact administrator.",
+        });
+      }
+
+      // Reject the full operation if even one selected product is not this store's.
+      // The store filter is also passed into the update query to protect against races.
+      const selectedProducts = await findProductsByIds(productIds);
+      const hasOnlyOwnProducts =
+        selectedProducts.length === productIds.length &&
+        selectedProducts.every((product) => Number(product.store_id) === storeId);
+
+      if (!hasOnlyOwnProducts) {
+        return res.status(403).json({
+          message: "You can only update the status of products belonging to your store.",
+        });
+      }
+    }
+
+    const updatedProducts = await bulkUpdateProductStatus(productIds, isActive, storeId);
     return res.status(200).json({
       message: `Successfully updated ${updatedProducts.length} product(s)`,
       count: updatedProducts.length,

@@ -15,16 +15,20 @@ const {
   verifySetupToken,
   setPassword,
   getMyStore,
+  updateMyStoreLocation,
+  resolveStoreByLocation,
 } = require("./store.controller");
 const { verifyToken, isAdmin } = require("../../../middleware/auth.middleware");
 
-// Public endpoints for Store Owner passwordless access request & setup
+// Public endpoints
+router.get("/resolve-by-location", resolveStoreByLocation);
 router.post("/request-access", requestStoreAccess);
 router.get("/verify-setup-token", verifySetupToken);
 router.post("/set-password", setPassword);
 
 // Store Owner private endpoints
 router.get("/my-store", verifyToken, getMyStore);
+router.patch("/my-store/location", verifyToken, updateMyStoreLocation);
 router.patch("/:id/status", verifyToken, toggleStoreStatus);
 
 // Admin-only Store & Access Request Management

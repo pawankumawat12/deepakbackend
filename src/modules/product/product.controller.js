@@ -212,12 +212,22 @@ async function createProductHandler(req, res) {
       });
     }
 
-    // Strict category restriction for Store Owner
+    // Strict category restriction and location check for Store Owner
     if (req.user && req.user.role === "store_owner") {
       const storeId = req.user.store_id;
       if (!storeId) {
         return res.status(403).json({
           message: "No store is associated with your account. Contact administrator.",
+        });
+      }
+
+      // Check that store owner has set their store location on the map before adding products
+      const store = await db("stores").where({ id: storeId }).first();
+      if (!store || store.latitude == null || store.longitude == null) {
+        return res.status(400).json({
+          success: false,
+          code: "STORE_LOCATION_REQUIRED",
+          message: "Please set your Bakery Store Location on the map first before adding products.",
         });
       }
 

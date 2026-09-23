@@ -1,3 +1,4 @@
+const db = require("../../config/db");
 const { getOrderPricingSettings } = require("../models/settings.model");
 
 /**
@@ -259,28 +260,65 @@ async function calculateCartAndOrderPricing({
     ? roundCurrency(minimumOrderAmount - rawSubtotal)
     : 0;
 
-  // 4. Distance Calculation
+  // 4. Distance Calculation & Range Check
   let distanceKm = null;
-  if (
-    deliveryAddress &&
-    deliveryAddress.latitude != null &&
-    deliveryAddress.longitude != null &&
-    settings.store_latitude != null &&
-    settings.store_longitude != null
-  ) {
-    distanceKm = calculateDistanceInKm(
-      settings.store_latitude,
-      settings.store_longitude,
-      deliveryAddress.latitude,
-      deliveryAddress.longitude
-    );
-  }
+  let isOutOfRange = false;
+  let maxDeliveryDistance = null;
 
-  const maxDeliveryDistance = Number(settings.max_delivery_distance) || 0;
-  const isOutOfRange =
-    maxDeliveryDistance > 0 && distanceKm != null
-      ? distanceKm > maxDeliveryDistance
-      : false;
+  const branchStoreItem = Array.isArray(items)
+    ? items.find((i) => i.store_id != null)
+    : null;
+  const branchStoreId = branchStoreItem ? branchStoreItem.store_id : null;
+
+  if (branchStoreId != null) {
+    // Fulfilled by Branch Store
+    let branchStore = null;
+    try {
+      branchStore = await db("stores").where({ id: branchStoreId }).first();
+    } catch {
+      // ignore
+    }
+
+    if (
+      branchStore &&
+      branchStore.latitude != null &&
+      branchStore.longitude != null &&
+      deliveryAddress &&
+      deliveryAddress.latitude != null &&
+      deliveryAddress.longitude != null
+    ) {
+      distanceKm = calculateDistanceInKm(
+        branchStore.latitude,
+        branchStore.longitude,
+        deliveryAddress.latitude,
+        deliveryAddress.longitude
+      );
+      maxDeliveryDistance = Number(branchStore.max_delivery_distance) || 10;
+      isOutOfRange =
+        maxDeliveryDistance > 0 && distanceKm != null
+          ? distanceKm > maxDeliveryDistance
+          : false;
+    }
+  } else {
+    // Fulfilled by Admin: Admin can deliver everywhere!
+    if (
+      deliveryAddress &&
+      deliveryAddress.latitude != null &&
+      deliveryAddress.longitude != null &&
+      settings.store_latitude != null &&
+      settings.store_longitude != null
+    ) {
+      distanceKm = calculateDistanceInKm(
+        settings.store_latitude,
+        settings.store_longitude,
+        deliveryAddress.latitude,
+        deliveryAddress.longitude
+      );
+    }
+    // Admin delivers everywhere, so isOutOfRange is always false for Admin
+    maxDeliveryDistance = null;
+    isOutOfRange = false;
+  }
 
   // 5. Delivery Fee Calculation
   const freeDeliveryThreshold = roundCurrency(settings.free_delivery_threshold);

@@ -116,6 +116,19 @@ async function createStore(req, res) {
       }
     }
 
+    const numLat = latitude ? parseFloat(latitude) : null;
+    const numLng = longitude ? parseFloat(longitude) : null;
+
+    if (numLat != null && numLng != null) {
+      const conflict = await storeModel.checkTerritoryConflict(numLat, numLng);
+      if (conflict.hasConflict) {
+        return res.status(400).json({
+          success: false,
+          message: conflict.message,
+        });
+      }
+    }
+
     const storeData = {
       name: storeName.trim(),
       phone: cleanPhone,
@@ -124,8 +137,12 @@ async function createStore(req, res) {
       city: city ? String(city).trim() : null,
       state: state ? String(state).trim() : "Rajasthan",
       pincode: cleanPincode,
-      latitude: latitude ? parseFloat(latitude) : null,
-      longitude: longitude ? parseFloat(longitude) : null,
+      latitude: numLat,
+      longitude: numLng,
+      max_delivery_distance:
+        req.body.max_delivery_distance != null
+          ? Math.max(1, parseFloat(req.body.max_delivery_distance))
+          : 10.0,
       is_open: true,
       is_active: true,
     };
@@ -145,9 +162,19 @@ async function createStore(req, res) {
 
     emitBranchStatusChange(store);
 
+    // Automatically send password setup email to the store owner's registered email
+    sendStoreApprovalEmail({
+      email: ownerData.email,
+      ownerName: ownerData.name,
+      storeName: store.name,
+      setupToken,
+    }).catch((emailErr) => {
+      console.error("[Store Create] Failed to send password setup email:", emailErr.message);
+    });
+
     return res.status(201).json({
       success: true,
-      message: `Store "${store.name}" created successfully!`,
+      message: `Store "${store.name}" created successfully! A password setup link has been sent to ${ownerData.email}.`,
       store,
       owner: user,
       setupToken,
@@ -284,6 +311,24 @@ async function updateStore(req, res) {
     }
     if (latitude !== undefined) storeData.latitude = latitude ? parseFloat(latitude) : null;
     if (longitude !== undefined) storeData.longitude = longitude ? parseFloat(longitude) : null;
+    if (req.body.max_delivery_distance !== undefined) {
+      storeData.max_delivery_distance = Math.max(1, parseFloat(req.body.max_delivery_distance) || 10.0);
+    }
+
+    if (storeData.latitude != null && storeData.longitude != null) {
+      const conflict = await storeModel.checkTerritoryConflict(
+        storeData.latitude,
+        storeData.longitude,
+        id
+      );
+      if (conflict.hasConflict) {
+        return res.status(400).json({
+          success: false,
+          message: conflict.message,
+        });
+      }
+    }
+
     if (is_open !== undefined) {
       if (!isBoolean(is_open)) {
         return res.status(400).json({ success: false, message: "is_open must be a boolean value." });
@@ -731,6 +776,70 @@ async function getMyStore(req, res) {
   }
 }
 
+async function updateMyStoreLocation(req, res) {
+  try {
+    const { latitude, longitude, address, city, state, pincode, max_delivery_distance } =
+      req.body || {};
+
+    if (req.user.role !== "store_owner" && req.user.role !== "admin") {
+      return res.status(403).json({ success: false, message: "Access restricted to store owners." });
+    }
+
+    const store = await storeModel.getStoreByOwnerId(req.user.id);
+    if (!store) {
+      return res.status(404).json({ success: false, message: "No store linked to your account." });
+    }
+
+    const numLat = latitude != null && latitude !== "" ? parseFloat(latitude) : null;
+    const numLng = longitude != null && longitude !== "" ? parseFloat(longitude) : null;
+
+    if (numLat != null && numLng != null) {
+      const conflict = await storeModel.checkTerritoryConflict(numLat, numLng, store.id);
+      if (conflict.hasConflict) {
+        return res.status(400).json({
+          success: false,
+          message: conflict.message,
+        });
+      }
+    }
+
+    const storeData = {};
+    if (numLat != null) storeData.latitude = numLat;
+    if (numLng != null) storeData.longitude = numLng;
+    if (address !== undefined) storeData.address = address ? String(address).trim() : null;
+    if (city !== undefined) storeData.city = city ? String(city).trim() : null;
+    if (state !== undefined) storeData.state = state ? String(state).trim() : "Rajasthan";
+    if (pincode !== undefined) storeData.pincode = pincode ? String(pincode).trim() : null;
+    if (max_delivery_distance != null) {
+      storeData.max_delivery_distance = Math.max(1, parseFloat(max_delivery_distance) || 10.0);
+    }
+
+    const updated = await storeModel.updateStore(store.id, storeData);
+    return res.status(200).json({
+      success: true,
+      message: "Store location and delivery settings saved successfully!",
+      store: updated,
+    });
+  } catch (error) {
+    console.error("Update my store location error:", error);
+    return res.status(500).json({ success: false, message: "Failed to update store location." });
+  }
+}
+
+async function resolveStoreByLocation(req, res) {
+  try {
+    const { lat, lng } = req.query || {};
+    const result = await storeModel.resolveStoreByCustomerLocation(lat, lng);
+    return res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error("Resolve store by location error:", error);
+    return res.status(500).json({ success: false, message: "Failed to resolve store for location." });
+  }
+}
+
 module.exports = {
   createStore,
   listStores,
@@ -746,4 +855,6 @@ module.exports = {
   verifySetupToken,
   setPassword,
   getMyStore,
+  updateMyStoreLocation,
+  resolveStoreByLocation,
 };

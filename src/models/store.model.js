@@ -91,6 +91,8 @@ async function ensureStoreColumns() {
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_forwarded_to_store BOOLEAN DEFAULT FALSE;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS forwarded_at TIMESTAMPTZ;
       ALTER TABLE order_items ADD COLUMN IF NOT EXISTS store_id INTEGER;
+      ALTER TABLE stores ADD COLUMN IF NOT EXISTS max_delivery_distance NUMERIC(5, 2) DEFAULT 10.0;
+      ALTER TABLE stores ADD COLUMN IF NOT EXISTS is_main_admin BOOLEAN DEFAULT FALSE;
     `);
 
     columnsChecked = true;
@@ -236,7 +238,6 @@ async function createStoreWithOwner({ storeData, ownerData, categoryIds = [], ad
       setup_token: setupToken,
       setup_token_expires_at: expiresAt,
       approved_at: new Date(),
-      permissions: JSON.stringify(["orders", "products", "inventory", "store_settings"]),
     });
 
     return { store, user, setupToken };
@@ -764,6 +765,206 @@ async function completePasswordSetup(userId, requestId, hashedPassword) {
   });
 }
 
+function calculateDistanceInKm(lat1, lon1, lat2, lon2) {
+  if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return null;
+  const numLat1 = Number(lat1);
+  const numLon1 = Number(lon1);
+  const numLat2 = Number(lat2);
+  const numLon2 = Number(lon2);
+  if (isNaN(numLat1) || isNaN(numLon1) || isNaN(numLat2) || isNaN(numLon2)) return null;
+  if (numLat1 === 0 && numLon1 === 0) return null;
+  if (numLat2 === 0 && numLon2 === 0) return null;
+
+  const R = 6371; // Earth radius in km
+  const dLat = ((numLat2 - numLat1) * Math.PI) / 180;
+  const dLon = ((numLon2 - numLon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((numLat1 * Math.PI) / 180) *
+      Math.cos((numLat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c * 100) / 100;
+}
+
+/**
+ * Checks whether a proposed (lat, lng) falls within any existing store's configured delivery radius
+ */
+async function checkTerritoryConflict(lat, lng, excludeStoreId = null) {
+  await ensureStoreColumns();
+  const numLat = Number(lat);
+  const numLng = Number(lng);
+  if (isNaN(numLat) || isNaN(numLng) || numLat === 0 || numLng === 0) {
+    return { hasConflict: false };
+  }
+
+  // 1. Check against Admin Main Bakery location from settings
+  try {
+    const settingsRow = await db("settings").where({ key: "pricing" }).first();
+    let pricingSettings = {};
+    if (settingsRow && settingsRow.value) {
+      pricingSettings =
+        typeof settingsRow.value === "string"
+          ? JSON.parse(settingsRow.value)
+          : settingsRow.value;
+    }
+    const adminLat = Number(pricingSettings.store_latitude);
+    const adminLng = Number(pricingSettings.store_longitude);
+    const adminRadius = Number(pricingSettings.max_delivery_distance) || 10;
+
+    if (!isNaN(adminLat) && !isNaN(adminLng) && adminLat !== 0 && adminLng !== 0) {
+      const distToAdmin = calculateDistanceInKm(numLat, numLng, adminLat, adminLng);
+      if (distToAdmin != null && distToAdmin <= adminRadius) {
+        return {
+          hasConflict: true,
+          conflictingStore: {
+            id: 0,
+            name: "Main Bakery (Admin Store)",
+            is_admin: true,
+          },
+          distanceKm: distToAdmin,
+          allowedDistance: adminRadius,
+          message: `This location is within the active delivery zone of Main Bakery (${distToAdmin} km away, delivery zone is ${adminRadius} km). New stores cannot be opened inside an existing delivery zone.`,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn("[Store Model] Territory check vs Admin notice:", err.message);
+  }
+
+  // 2. Check against all active branch stores
+  let query = db(STORES_TABLE)
+    .where({ is_active: true })
+    .whereNotNull("latitude")
+    .whereNotNull("longitude");
+
+  if (excludeStoreId) {
+    query = query.whereNot({ id: Number(excludeStoreId) });
+  }
+
+  const existingStores = await query;
+  for (const store of existingStores) {
+    const sLat = Number(store.latitude);
+    const sLng = Number(store.longitude);
+    const storeRadius = Number(store.max_delivery_distance) || 10;
+
+    const dist = calculateDistanceInKm(numLat, numLng, sLat, sLng);
+    if (dist != null && dist <= storeRadius) {
+      return {
+        hasConflict: true,
+        conflictingStore: store,
+        distanceKm: dist,
+        allowedDistance: storeRadius,
+        message: `This location is within the active delivery zone of "${store.name}" (${dist} km away, delivery zone is ${storeRadius} km). New stores cannot be opened inside an existing store's territory.`,
+      };
+    }
+  }
+
+  return { hasConflict: false };
+}
+
+/**
+ * Resolves which store serves a customer based on customer's coordinates.
+ * If within a local branch's delivery radius, returns that branch.
+ * If outside all branches, Admin can deliver everywhere!
+ */
+async function resolveStoreByCustomerLocation(custLat, custLng) {
+  await ensureStoreColumns();
+  const numLat = Number(custLat);
+  const numLng = Number(custLng);
+
+  // 1. Get Admin store details as the universal fallback (Admin delivers everywhere)
+  let adminStore = {
+    id: null,
+    name: "Main Bakery",
+    is_main_admin: true,
+    latitude: 27.559134,
+    longitude: 75.236982,
+    max_delivery_distance: null, // Admin delivers everywhere
+    can_deliver: true,
+  };
+
+  try {
+    const settingsRow = await db("settings").where({ key: "pricing" }).first();
+    if (settingsRow && settingsRow.value) {
+      const p =
+        typeof settingsRow.value === "string"
+          ? JSON.parse(settingsRow.value)
+          : settingsRow.value;
+      if (p.store_latitude) adminStore.latitude = Number(p.store_latitude);
+      if (p.store_longitude) adminStore.longitude = Number(p.store_longitude);
+      if (p.max_delivery_distance != null) {
+        adminStore.max_delivery_distance = Number(p.max_delivery_distance);
+      }
+    }
+  } catch (err) {
+    console.warn("[Store Model] Admin store fetch notice:", err.message);
+  }
+
+  if (isNaN(numLat) || isNaN(numLng) || numLat === 0 || numLng === 0) {
+    return {
+      store: adminStore,
+      storeType: "admin",
+      distanceKm: null,
+      message: "Fulfilled by Main Bakery",
+    };
+  }
+
+  // 2. Check all active branch stores to see if any local store covers this customer
+  const activeStores = await db(STORES_TABLE)
+    .where({ is_active: true, is_open: true })
+    .whereNotNull("latitude")
+    .whereNotNull("longitude");
+
+  let bestStore = null;
+  let minDistance = Infinity;
+
+  for (const store of activeStores) {
+    const sLat = Number(store.latitude);
+    const sLng = Number(store.longitude);
+    const radius = Number(store.max_delivery_distance) || 10;
+
+    const dist = calculateDistanceInKm(numLat, numLng, sLat, sLng);
+    if (dist != null && dist <= radius) {
+      if (dist < minDistance) {
+        minDistance = dist;
+        bestStore = {
+          ...store,
+          distanceKm: dist,
+        };
+      }
+    }
+  }
+
+  if (bestStore) {
+    return {
+      store: bestStore,
+      storeType: "branch",
+      distanceKm: minDistance,
+      message: `Fulfilled by local branch: ${bestStore.name} (${minDistance} km away)`,
+    };
+  }
+
+  // 3. Admin delivers everywhere!
+  const distToAdmin = calculateDistanceInKm(
+    numLat,
+    numLng,
+    adminStore.latitude,
+    adminStore.longitude
+  );
+
+  return {
+    store: {
+      ...adminStore,
+      distanceKm: distToAdmin,
+    },
+    storeType: "admin",
+    distanceKm: distToAdmin,
+    message: "Fulfilled by Main Bakery (Universal Delivery)",
+  };
+}
+
 module.exports = {
   createStoreWithOwner,
   listStores,
@@ -781,4 +982,8 @@ module.exports = {
   rejectStoreLoginRequest,
   findRequestBySetupToken,
   completePasswordSetup,
+  calculateDistanceInKm,
+  checkTerritoryConflict,
+  resolveStoreByCustomerLocation,
 };
+

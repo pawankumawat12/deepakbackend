@@ -4,10 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js",
-    "db:migrate": "npx knex migrate:latest",
-    "db:seed": "npx knex seed:run"
+    "start": "bash -c 'if [ -d \"$HOME/.nvm/versions/node/v20.20.2/bin\" ]; then export PATH=\"$HOME/.nvm/versions/node/v20.20.2/bin:$PATH\"; elif [ -d \"$HOME/.nvm/versions/node/v22.23.0/bin\" ]; then export PATH=\"$HOME/.nvm/versions/node/v22.23.0/bin:$PATH\"; fi; exec node server.js'",
+    "dev": "bash -c 'if [ -d \"$HOME/.nvm/versions/node/v20.20.2/bin\" ]; then export PATH=\"$HOME/.nvm/versions/node/v20.20.2/bin:$PATH\"; elif [ -d \"$HOME/.nvm/versions/node/v22.23.0/bin\" ]; then export PATH=\"$HOME/.nvm/versions/node/v22.23.0/bin:$PATH\"; fi; exec nodemon server.js'",
+    "db:migrate": "bash -c 'if [ -d \"$HOME/.nvm/versions/node/v20.20.2/bin\" ]; then export PATH=\"$HOME/.nvm/versions/node/v20.20.2/bin:$PATH\"; elif [ -d \"$HOME/.nvm/versions/node/v22.23.0/bin\" ]; then export PATH=\"$HOME/.nvm/versions/node/v22.23.0/bin:$PATH\"; fi; exec npx knex migrate:latest'",
+    "db:seed": "bash -c 'if [ -d \"$HOME/.nvm/versions/node/v20.20.2/bin\" ]; then export PATH=\"$HOME/.nvm/versions/node/v20.20.2/bin:$PATH\"; elif [ -d \"$HOME/.nvm/versions/node/v22.23.0/bin\" ]; then export PATH=\"$HOME/.nvm/versions/node/v22.23.0/bin:$PATH\"; fi; exec npx knex seed:run'"
   },
   "keywords": [],
   "author": "",

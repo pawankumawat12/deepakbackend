@@ -15,6 +15,7 @@ async function ensureOrderStoreColumns() {
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS store_id INTEGER;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_forwarded_to_store BOOLEAN DEFAULT FALSE;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS forwarded_at TIMESTAMPTZ;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS store_stock_reverted BOOLEAN DEFAULT FALSE;
       ALTER TABLE order_items ADD COLUMN IF NOT EXISTS store_id INTEGER;
     `);
     orderStoreColumnsChecked = true;
@@ -576,10 +577,17 @@ async function findAllOrders({ page = 1, limit = 20, status, search, storeId, is
   const offset = (p - 1) * l;
   let query = db("orders as o")
     .leftJoin("stores as s", "o.store_id", "s.id")
-    .select("o.*", "s.name as store_name");
+    .select("o.*", "s.name as store_name", "s.auto_forward_orders as store_auto_forward_orders");
 
   if (storeId) {
     query = query.where("o.store_id", storeId);
+    // Never show orders in store order list that were delivered directly by Admin without being dispatched to the store
+    query = query.whereNot(function () {
+      this.where("o.is_forwarded_to_store", false).whereIn(db.raw("LOWER(o.status)"), [
+        "delivered",
+        "completed",
+      ]);
+    });
   }
 
   if (isForwardedOnly) {
@@ -590,6 +598,12 @@ async function findAllOrders({ page = 1, limit = 20, status, search, storeId, is
   let baseStatsQuery = db("orders as o");
   if (storeId) {
     baseStatsQuery = baseStatsQuery.where("o.store_id", storeId);
+    baseStatsQuery = baseStatsQuery.whereNot(function () {
+      this.where("o.is_forwarded_to_store", false).whereIn(db.raw("LOWER(o.status)"), [
+        "delivered",
+        "completed",
+      ]);
+    });
   }
   if (isForwardedOnly) {
     baseStatsQuery = baseStatsQuery.where("o.is_forwarded_to_store", true);
@@ -616,7 +630,16 @@ async function findAllOrders({ page = 1, limit = 20, status, search, storeId, is
     baseStatsQuery
       .select([
         db.raw("COUNT(o.id)::int as total_orders"),
-        db.raw("COALESCE(SUM(o.total_amount), 0)::float as total_amount"),
+        db.raw(`
+          COALESCE(SUM(
+            CASE 
+              WHEN LOWER(o.status) NOT IN ('cancelled', 'rejected', 'payment failed')
+                   AND LOWER(COALESCE(o.payment_status, '')) NOT IN ('failed', 'refunded')
+              THEN o.total_amount
+              ELSE 0
+            END
+          ), 0)::float as total_amount
+        `),
         db.raw("COUNT(CASE WHEN LOWER(o.status) = 'preparing' THEN 1 END)::int as preparing_orders"),
         db.raw("COUNT(CASE WHEN LOWER(o.status) IN ('out for delivery', 'out_for_delivery') THEN 1 END)::int as out_for_delivery_orders"),
         db.raw("COUNT(CASE WHEN LOWER(o.status) = 'delivered' THEN 1 END)::int as delivered_orders"),
@@ -687,6 +710,18 @@ async function forwardOrderToStore(orderId, storeId = null) {
     throw err;
   }
 
+  const orderStatus = (order.status || "").toLowerCase();
+  if (orderStatus === "delivered" || orderStatus === "completed") {
+    const err = new Error("This order was already delivered directly by Admin and cannot be forwarded to a store.");
+    err.statusCode = 400;
+    throw err;
+  }
+  if (orderStatus === "cancelled") {
+    const err = new Error("Cannot forward a cancelled order to a store.");
+    err.statusCode = 400;
+    throw err;
+  }
+
   const targetStoreId = storeId || order.store_id;
   if (!targetStoreId) {
     const err = new Error("No store assigned to this order. Please select a store first.");
@@ -711,6 +746,7 @@ async function forwardOrderToStore(orderId, storeId = null) {
 }
 
 async function updateOrderStatus(orderId, status) {
+  await ensureOrderStoreColumns();
   const order = await db("orders").where({ id: orderId }).first();
   if (!order) {
     throw new Error("Order not found");
@@ -734,18 +770,65 @@ async function updateOrderStatus(orderId, status) {
     updated_at: db.fn.now(),
   };
 
-  if (status === "Delivered" || status === "Completed") {
+  const isDeliveredNow = status === "Delivered" || status === "Completed";
+
+  if (isDeliveredNow) {
     updatePayload.payment_status = "Paid";
     if (!order.delivered_at) {
       updatePayload.delivered_at = db.fn.now();
     }
   }
 
-  const [updated] = await db("orders")
-    .where({ id: orderId })
-    .update(updatePayload)
-    .returning("*");
-  return updated;
+  return db.transaction(async (trx) => {
+    // If Admin fulfills/delivers an order directly (never dispatched/forwarded to store) containing store products:
+    // Do NOT consume or deduct the store's physical product stock or raw materials!
+    // Restore the store's product stock and raw ingredient stock back to the store.
+    if (
+      isDeliveredNow &&
+      !order.is_forwarded_to_store &&
+      order.store_id &&
+      !order.store_stock_reverted
+    ) {
+      const items = await trx("order_items").where({ order_id: orderId });
+      for (const item of items) {
+        if (item.availability_type !== "MADE_TO_ORDER") {
+          const product = await trx("products").where({ id: item.product_id }).first();
+          // If the product belongs to a store, restore the deducted stock
+          if (product && product.store_id) {
+            await trx("products")
+              .where({ id: item.product_id })
+              .increment("stock", item.quantity);
+          }
+        }
+      }
+
+      // Restore raw ingredients if previously deducted
+      if (order.ingredient_stock_deducted) {
+        try {
+          const { restoreIngredientStockForOrder } = require("../services/inventory.service");
+          await restoreIngredientStockForOrder(
+            orderId,
+            trx,
+            "Admin delivered order directly from central kitchen; restored store raw materials and product stock."
+          );
+        } catch (restErr) {
+          console.warn(
+            "[OrderModel] Warning during ingredient stock restoration on Admin direct delivery:",
+            restErr.message
+          );
+        }
+      }
+
+      updatePayload.store_stock_reverted = true;
+    }
+
+    const [updated] = await trx("orders")
+      .where({ id: orderId })
+      .update(updatePayload)
+      .returning("*");
+
+    return updated;
+  });
 }
 
 async function updateItemProductionStatus(orderItemId, productionStatus) {
@@ -898,20 +981,7 @@ async function bulkUpdateOrderStatus(ids, targetStatus, { cancelReason = "Cancel
         const cancelled = await cancelOrder(order.id, cancelReason);
         updatedOrders.push(cancelled);
       } else {
-        const updatePayload = {
-          status: targetStatus,
-          updated_at: db.fn.now(),
-        };
-        if (targetStatus === "Delivered" || targetStatus === "Completed") {
-          updatePayload.payment_status = "Paid";
-          if (!order.delivered_at) {
-            updatePayload.delivered_at = db.fn.now();
-          }
-        }
-        const [updated] = await db("orders")
-          .where({ id: order.id })
-          .update(updatePayload)
-          .returning("*");
+        const updated = await updateOrderStatus(order.id, targetStatus);
         updatedOrders.push(updated);
       }
     } catch (err) {

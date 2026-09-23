@@ -254,10 +254,23 @@ async function listStores({ search = "", is_open, is_active, page = 1, limit = 5
       "u.phone as owner_phone",
       "u.is_active as owner_is_active",
       db.raw(`
-        COALESCE((SELECT COUNT(id)::int FROM orders WHERE store_id = s.id), 0) as total_orders
+        COALESCE((
+          SELECT COUNT(id)::int 
+          FROM orders 
+          WHERE store_id = s.id
+            AND NOT (COALESCE(is_forwarded_to_store, false) = false AND LOWER(COALESCE(status, '')) IN ('delivered', 'completed'))
+            AND LOWER(COALESCE(status, '')) NOT IN ('cancelled', 'rejected', 'payment failed')
+        ), 0) as total_orders
       `),
       db.raw(`
-        COALESCE((SELECT SUM(total_amount)::float FROM orders WHERE store_id = s.id), 0) as total_revenue
+        COALESCE((
+          SELECT SUM(total_amount)::float 
+          FROM orders 
+          WHERE store_id = s.id 
+            AND NOT (COALESCE(is_forwarded_to_store, false) = false AND LOWER(COALESCE(status, '')) IN ('delivered', 'completed'))
+            AND LOWER(COALESCE(status, '')) NOT IN ('cancelled', 'rejected', 'payment failed')
+            AND LOWER(COALESCE(payment_status, '')) NOT IN ('failed', 'refunded')
+        ), 0) as total_revenue
       `),
       db.raw(`
         COALESCE((SELECT COUNT(id)::int FROM products WHERE store_id = s.id), 0) as total_products
@@ -344,10 +357,23 @@ async function getStoreById(id) {
       "u.phone as owner_phone",
       "u.is_active as owner_is_active",
       db.raw(`
-        COALESCE((SELECT COUNT(id)::int FROM orders WHERE store_id = s.id), 0) as total_orders
+        COALESCE((
+          SELECT COUNT(id)::int 
+          FROM orders 
+          WHERE store_id = s.id
+            AND NOT (COALESCE(is_forwarded_to_store, false) = false AND LOWER(COALESCE(status, '')) IN ('delivered', 'completed'))
+            AND LOWER(COALESCE(status, '')) NOT IN ('cancelled', 'rejected', 'payment failed')
+        ), 0) as total_orders
       `),
       db.raw(`
-        COALESCE((SELECT SUM(total_amount)::float FROM orders WHERE store_id = s.id), 0) as total_revenue
+        COALESCE((
+          SELECT SUM(total_amount)::float 
+          FROM orders 
+          WHERE store_id = s.id 
+            AND NOT (COALESCE(is_forwarded_to_store, false) = false AND LOWER(COALESCE(status, '')) IN ('delivered', 'completed'))
+            AND LOWER(COALESCE(status, '')) NOT IN ('cancelled', 'rejected', 'payment failed')
+            AND LOWER(COALESCE(payment_status, '')) NOT IN ('failed', 'refunded')
+        ), 0) as total_revenue
       `),
       db.raw(`
         COALESCE((SELECT COUNT(id)::int FROM products WHERE store_id = s.id), 0) as total_products

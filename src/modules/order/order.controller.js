@@ -1183,12 +1183,19 @@ async function updatePaymentStatusController(req, res) {
       }
     }
 
-    // RULE 4: Refund status must be updated based on Razorpay response, not arbitrary frontend input
+    // RULE 4: Store owners cannot process refunds; Refund status must be updated based on Razorpay response
     if (
       targetStatusLower === "refunded" ||
       targetStatusLower === "partially refunded" ||
       targetStatusLower === "partially_refunded"
     ) {
+      if (req.user && req.user.role === "store_owner") {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied. Store owners are not permitted to process or authorize refunds.",
+        });
+      }
+
       if (isOnline) {
         // Online payments MUST be refunded via Razorpay API
         if (!order.transaction_id && !order.razorpay_payment_id) {
@@ -1354,6 +1361,13 @@ async function refundOrderController(req, res) {
 
     if (!orderId) {
       return res.status(400).json({ success: false, message: "Invalid order ID" });
+    }
+
+    if (req.user?.role === "store_owner") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Store owners are not permitted to process refunds.",
+      });
     }
 
     const order = await findOrderById(orderId);

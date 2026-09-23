@@ -8,6 +8,7 @@ const {
   findCategoriesByIds,
   countCategories,
   countChildCategories,
+  getCategoryStats,
   createCategory,
   updateCategory,
   deleteCategory,
@@ -63,15 +64,20 @@ async function listCategories(req, res) {
       filters.storeId = Number(req.query.store_id);
     }
 
-    const [categories, total] = await Promise.all([
+    const [categories, total, categoryStats] = await Promise.all([
       findCategories({ page, limit, offset, ...filters }),
       countCategories(filters),
+      getCategoryStats().catch((err) => {
+        console.error("Error fetching category stats:", err);
+        return { total: 0, active: 0, inactive: 0 };
+      }),
     ]);
 
     return res.status(200).json({
       message: "Categories fetched successfully",
       data: categories,
       pagination: buildPaginationMeta(page, limit, total),
+      summary: categoryStats,
     });
   } catch (error) {
     console.error("List categories error:", error);

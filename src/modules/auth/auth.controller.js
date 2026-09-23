@@ -1152,25 +1152,10 @@ async function adminLogin(req, res) {
     }
 
     if (admin.role === "store_owner" && !admin.password) {
-      const approvedRequest = await db("store_login_requests")
-        .where({ user_id: admin.id, status: "approved" })
-        .where("setup_token_expires_at", ">", new Date())
-        .orderBy("created_at", "desc")
-        .first();
-
-      if (approvedRequest && approvedRequest.setup_token) {
-        return res.status(403).json({
-          success: false,
-          isApprovedPendingPassword: true,
-          setupUrl: `/store/set-password?token=${encodeURIComponent(approvedRequest.setup_token)}&email=${encodeURIComponent(admin.email)}`,
-          message: "Your access request has been approved! Redirecting to password setup...",
-        });
-      }
-
       return res.status(403).json({
         success: false,
-        isPendingStoreOwner: true,
-        message: "Your account is pending Admin approval. Please request access to receive your setup link.",
+        isPasswordNotSet: true,
+        message: "Your password has not been set yet. A password setup link was sent to your registered email. Please check your inbox to set your password.",
       });
     }
 
@@ -1181,7 +1166,7 @@ async function adminLogin(req, res) {
     if (admin.is_blocked || admin.is_active === false) {
       return res.status(403).json({
         success: false,
-        message: admin.block_reason || "Admin account is inactive or blocked.",
+        message: admin.block_reason || "This account is inactive or blocked.",
       });
     }
 
@@ -2105,6 +2090,7 @@ const getCustomers = async (req, res) => {
       message: "Customers fetched successfully",
       data: result.customers,
       pagination: result.pagination,
+      summary: result.summary,
     });
   } catch (error) {
     console.error("Get customers error:", error);

@@ -8,6 +8,7 @@ const {
   findProductById,
   findProducts,
   countProducts,
+  getProductStats,
   createProduct,
   updateProduct,
   deleteProduct,
@@ -95,12 +96,20 @@ async function listProducts(req, res) {
       filters.storeId = storeId;
     }
 
-    const [products, total, activeOffers] = await Promise.all([
+    const [products, total, activeOffers, productStats] = await Promise.all([
       findProducts({ page, limit, offset, ...filters }),
       countProducts(filters),
       listActiveOffersCustomer().catch((err) => {
         console.error("Error fetching active offers for listProducts:", err);
         return [];
+      }),
+      getProductStats({
+        storeId: filters.storeId,
+        includeAdmin: filters.includeAdmin,
+        adminOnly: filters.adminOnly,
+      }).catch((err) => {
+        console.error("Error fetching product stats:", err);
+        return { total: 0, active: 0, inactive: 0, outOfStock: 0, totalCategories: 0 };
       }),
     ]);
 
@@ -110,6 +119,7 @@ async function listProducts(req, res) {
       message: "Products fetched successfully",
       data: productsWithOffers,
       pagination: buildPaginationMeta(page, limit, total),
+      summary: productStats,
     });
   } catch (error) {
     console.error("List products error:", error);

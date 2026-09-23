@@ -99,7 +99,7 @@ async function ensureStoreColumns() {
   }
 }
 
-async function createStoreWithOwner({ storeData, ownerData, categoryIds = [] }) {
+async function createStoreWithOwner({ storeData, ownerData, categoryIds = [], adminId = null }) {
   await ensureStoreColumns();
   return await db.transaction(async (trx) => {
     // 1. Check if owner email already registered
@@ -108,9 +108,24 @@ async function createStoreWithOwner({ storeData, ownerData, categoryIds = [] }) 
       .first();
 
     if (existingUser) {
-      const error = new Error("A user with this email address is already registered.");
-      error.statusCode = 400;
-      throw error;
+      if (existingUser.role === "store_owner") {
+        const activeStoreForUser = await trx(STORES_TABLE)
+          .where({ owner_id: existingUser.id })
+          .first();
+        if (!activeStoreForUser) {
+          // The previous store was deleted, clean up this orphaned store owner user so they can be re-registered cleanly
+          await trx(STORE_LOGIN_REQUESTS_TABLE).where({ user_id: existingUser.id }).del();
+          await trx(USERS_TABLE).where({ id: existingUser.id }).del();
+        } else {
+          const error = new Error(`A store owner with this email is already assigned to active store "${activeStoreForUser.name}".`);
+          error.statusCode = 400;
+          throw error;
+        }
+      } else {
+        const error = new Error("A user with this email address is already registered.");
+        error.statusCode = 400;
+        throw error;
+      }
     }
 
     // Check if owner phone already registered in users
@@ -119,9 +134,23 @@ async function createStoreWithOwner({ storeData, ownerData, categoryIds = [] }) 
         .where({ phone: ownerData.phone.trim() })
         .first();
       if (existingUserPhone) {
-        const error = new Error("A user with this owner phone number is already registered.");
-        error.statusCode = 400;
-        throw error;
+        if (existingUserPhone.role === "store_owner") {
+          const activeStoreForPhone = await trx(STORES_TABLE)
+            .where({ owner_id: existingUserPhone.id })
+            .first();
+          if (!activeStoreForPhone) {
+            await trx(STORE_LOGIN_REQUESTS_TABLE).where({ user_id: existingUserPhone.id }).del();
+            await trx(USERS_TABLE).where({ id: existingUserPhone.id }).del();
+          } else {
+            const error = new Error(`This owner phone number is already registered to store "${activeStoreForPhone.name}".`);
+            error.statusCode = 400;
+            throw error;
+          }
+        } else {
+          const error = new Error("A user with this owner phone number is already registered.");
+          error.statusCode = 400;
+          throw error;
+        }
       }
     }
 
@@ -194,7 +223,23 @@ async function createStoreWithOwner({ storeData, ownerData, categoryIds = [] }) 
       await trx(STORE_CATEGORIES_TABLE).insert(rows);
     }
 
-    return { store, user };
+    // 6. Pre-approve store owner access right upon creation and generate password setup token
+    const setupToken = crypto.randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days validity
+
+    await trx(STORE_LOGIN_REQUESTS_TABLE).insert({
+      store_id: store.id,
+      user_id: user.id,
+      email: user.email,
+      status: "approved",
+      approved_by: adminId ? Number(adminId) : null,
+      setup_token: setupToken,
+      setup_token_expires_at: expiresAt,
+      approved_at: new Date(),
+      permissions: JSON.stringify(["orders", "products", "inventory", "store_settings"]),
+    });
+
+    return { store, user, setupToken };
   });
 }
 
@@ -259,7 +304,23 @@ async function listStores({ search = "", is_open, is_active, page = 1, limit = 5
   const offset = (page - 1) * limit;
   query = query.limit(limit).offset(offset);
 
-  const stores = await query;
+  const [stores, statsRes] = await Promise.all([
+    query,
+    db(STORES_TABLE)
+      .select([
+        db.raw("COUNT(*)::int as total"),
+        db.raw("COUNT(CASE WHEN is_open = true THEN 1 END)::int as open"),
+        db.raw("COUNT(CASE WHEN is_open = false OR is_open IS NULL THEN 1 END)::int as closed"),
+      ])
+      .first(),
+  ]);
+
+  const summary = {
+    total: Number(statsRes?.total || total),
+    open: Number(statsRes?.open || 0),
+    closed: Number(statsRes?.closed || 0),
+  };
+
   return {
     stores,
     pagination: {
@@ -268,6 +329,7 @@ async function listStores({ search = "", is_open, is_active, page = 1, limit = 5
       total,
       totalPages,
     },
+    summary,
   };
 }
 
@@ -443,16 +505,24 @@ async function deleteStore(id) {
 
     await trx(STORE_CATEGORIES_TABLE).where({ store_id: id }).del();
     await trx(STORE_LOGIN_REQUESTS_TABLE).where({ store_id: id }).del();
+    if (store.owner_id) {
+      await trx(STORE_LOGIN_REQUESTS_TABLE).where({ user_id: store.owner_id }).del();
+    }
     await trx("orders").where({ store_id: id }).update({ store_id: null, is_forwarded_to_store: false });
     await trx("order_items").where({ store_id: id }).update({ store_id: null });
     await trx(USERS_TABLE).where({ store_id: id }).update({ store_id: null });
 
-    // Revoke the former owner's session so a deleted branch cannot continue
-    // using an already-issued access or refresh token.
+    // Revoke and permanently delete the store_owner user account created for this branch
     if (store.owner_id) {
-      await trx(USERS_TABLE)
-        .where({ id: store.owner_id })
-        .update({ is_active: false, access_token: null, store_id: null, updated_at: new Date() });
+      const ownerUser = await trx(USERS_TABLE).where({ id: store.owner_id }).first();
+      if (ownerUser && ownerUser.role === "store_owner") {
+        await trx(STORE_LOGIN_REQUESTS_TABLE).where({ user_id: store.owner_id }).del();
+        await trx(USERS_TABLE).where({ id: store.owner_id }).del();
+      } else if (ownerUser) {
+        await trx(USERS_TABLE)
+          .where({ id: store.owner_id })
+          .update({ is_active: false, access_token: null, store_id: null, updated_at: new Date() });
+      }
     }
 
     await trx(STORES_TABLE).where({ id }).del();
@@ -656,9 +726,9 @@ async function completePasswordSetup(userId, requestId, hashedPassword) {
       })
       .returning(["id", "name", "email", "role", "store_id", "is_active"]);
 
-    // 2. Clear token from request
+    // 2. Clear all setup tokens for this user
     await trx(STORE_LOGIN_REQUESTS_TABLE)
-      .where({ id: requestId })
+      .where({ user_id: userId })
       .update({
         setup_token: null,
         updated_at: new Date(),

@@ -36,7 +36,7 @@ function validatePrice(price) {
     return null;
   }
 
-  return Math.round(parsed * 100) / 100;
+  return Math.round(parsed);
 }
 
 function validateProductCreate({

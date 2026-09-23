@@ -262,12 +262,52 @@ function findProductsByIds(ids) {
     ]);
 }
 
+async function getProductStats({ storeId, includeAdmin = false, adminOnly = false } = {}) {
+  let baseQuery = db("products");
+
+  if (adminOnly) {
+    baseQuery = baseQuery.whereNull("products.store_id");
+  } else if (storeId !== undefined) {
+    if (includeAdmin) {
+      baseQuery = baseQuery.where(function () {
+        this.where("products.store_id", storeId).orWhereNull("products.store_id");
+      });
+    } else {
+      baseQuery = baseQuery.where({ "products.store_id": storeId });
+    }
+  }
+
+  const [productStats, categoryCount] = await Promise.all([
+    baseQuery
+      .clone()
+      .select([
+        db.raw("COUNT(*)::int as total"),
+        db.raw("COUNT(CASE WHEN is_active = true THEN 1 END)::int as active"),
+        db.raw("COUNT(CASE WHEN is_active = false THEN 1 END)::int as inactive"),
+        db.raw("COUNT(CASE WHEN stock <= 0 AND availability_type != 'MADE_TO_ORDER' THEN 1 END)::int as out_of_stock"),
+      ])
+      .first(),
+    db("categories")
+      .count("id as count")
+      .first(),
+  ]);
+
+  return {
+    total: Number(productStats?.total || 0),
+    active: Number(productStats?.active || 0),
+    inactive: Number(productStats?.inactive || 0),
+    outOfStock: Number(productStats?.out_of_stock || 0),
+    totalCategories: Number(categoryCount?.count || 0),
+  };
+}
+
 module.exports = {
   findProductById,
   findProducts,
   findProductsByIds,
   countProducts,
   countProductsByCategory,
+  getProductStats,
   createProduct,
   updateProduct,
   deleteProduct,

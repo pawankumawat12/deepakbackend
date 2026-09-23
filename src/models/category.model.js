@@ -230,12 +230,29 @@ async function bulkDeleteCategories(ids) {
   };
 }
 
+async function getCategoryStats() {
+  const statsRow = await db("categories")
+    .select([
+      db.raw("COUNT(*)::int as total"),
+      db.raw("COUNT(CASE WHEN is_active = true THEN 1 END)::int as active"),
+      db.raw("COUNT(CASE WHEN is_active = false THEN 1 END)::int as inactive"),
+    ])
+    .first();
+
+  return {
+    total: Number(statsRow?.total || 0),
+    active: Number(statsRow?.active || 0),
+    inactive: Number(statsRow?.inactive || 0),
+  };
+}
+
 module.exports = {
   findCategoryById,
   findCategories,
   findCategoriesByIds,
   countCategories,
   countChildCategories,
+  getCategoryStats,
   createCategory,
   updateCategory,
   deleteCategory,

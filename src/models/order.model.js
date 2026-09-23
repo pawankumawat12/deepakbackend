@@ -586,6 +586,15 @@ async function findAllOrders({ page = 1, limit = 20, status, search, storeId, is
     query = query.where("o.is_forwarded_to_store", true);
   }
 
+  // Base query for unconstrained store/admin metrics across all statuses
+  let baseStatsQuery = db("orders as o");
+  if (storeId) {
+    baseStatsQuery = baseStatsQuery.where("o.store_id", storeId);
+  }
+  if (isForwardedOnly) {
+    baseStatsQuery = baseStatsQuery.where("o.is_forwarded_to_store", true);
+  }
+
   if (status && status !== "all" && status !== "") {
     query = query.where("o.status", status);
   }
@@ -604,17 +613,16 @@ async function findAllOrders({ page = 1, limit = 20, status, search, storeId, is
   const [orders, countRow, statsRow] = await Promise.all([
     query.clone().orderBy("o.created_at", "desc").limit(l).offset(offset),
     query.clone().clearSelect().clearOrder().count("o.id as count").first(),
-    query
-      .clone()
-      .clearSelect()
-      .clearOrder()
+    baseStatsQuery
       .select([
         db.raw("COUNT(o.id)::int as total_orders"),
         db.raw("COALESCE(SUM(o.total_amount), 0)::float as total_amount"),
-        db.raw("COUNT(CASE WHEN o.status = 'Delivered' THEN 1 END)::int as delivered_orders"),
-        db.raw("COUNT(CASE WHEN o.status = 'Cancelled' THEN 1 END)::int as cancelled_orders"),
-        db.raw("COUNT(CASE WHEN o.status NOT IN ('Delivered', 'Cancelled') THEN 1 END)::int as pending_orders"),
-        db.raw("COALESCE(SUM(CASE WHEN o.status = 'Delivered' THEN o.total_amount END), 0)::float as delivered_amount"),
+        db.raw("COUNT(CASE WHEN LOWER(o.status) = 'preparing' THEN 1 END)::int as preparing_orders"),
+        db.raw("COUNT(CASE WHEN LOWER(o.status) IN ('out for delivery', 'out_for_delivery') THEN 1 END)::int as out_for_delivery_orders"),
+        db.raw("COUNT(CASE WHEN LOWER(o.status) = 'delivered' THEN 1 END)::int as delivered_orders"),
+        db.raw("COUNT(CASE WHEN LOWER(o.status) IN ('cancelled', 'rejected') THEN 1 END)::int as cancelled_orders"),
+        db.raw("COUNT(CASE WHEN LOWER(o.status) NOT IN ('delivered', 'cancelled', 'rejected') THEN 1 END)::int as pending_orders"),
+        db.raw("COALESCE(SUM(CASE WHEN LOWER(o.status) = 'delivered' THEN o.total_amount END), 0)::float as delivered_amount"),
       ])
       .first(),
   ]);
@@ -622,11 +630,13 @@ async function findAllOrders({ page = 1, limit = 20, status, search, storeId, is
   const total = Number(countRow?.count || 0);
   const stats = {
     totalOrders: Number(statsRow?.total_orders || total),
-    totalAmount: Number(statsRow?.total_amount || 0),
+    totalAmount: Math.round(Number(statsRow?.total_amount || 0)),
+    preparingOrders: Number(statsRow?.preparing_orders || 0),
+    outForDeliveryOrders: Number(statsRow?.out_for_delivery_orders || 0),
     deliveredOrders: Number(statsRow?.delivered_orders || 0),
     cancelledOrders: Number(statsRow?.cancelled_orders || 0),
     pendingOrders: Number(statsRow?.pending_orders || 0),
-    deliveredAmount: Number(statsRow?.delivered_amount || 0),
+    deliveredAmount: Math.round(Number(statsRow?.delivered_amount || 0)),
   };
 
   if (!orders.length) {

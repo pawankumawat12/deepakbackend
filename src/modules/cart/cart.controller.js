@@ -250,7 +250,7 @@ async function addCartItem(req, res) {
       if (store && (!store.is_active || !store.is_open)) {
         return res.status(400).json({
           success: false,
-          message: "This product is not available right now. Please try again later.",
+          message: "This product is not available right now.",
           storeClosed: !store.is_open,
           storeInactive: !store.is_active,
           storeName: store.name || null,

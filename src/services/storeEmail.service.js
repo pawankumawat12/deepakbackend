@@ -66,10 +66,10 @@ async function sendStoreInvitationEmail({ email, ownerName, storeName, loginUrl 
             </ol>
 
             <div class="btn-container">
-              <a href="${url}" class="btn">Go to Partner Portal</a>
+              <a href="${url}" class="btn" target="_blank" rel="noopener noreferrer">Go to Partner Portal</a>
             </div>
 
-            <p style="font-size: 13px; color: #64748b;">If the button above does not work, copy and paste this link into your browser:<br><a href="${url}" style="color: #166534;">${url}</a></p>
+            <p style="font-size: 13px; color: #64748b;">If the button above does not work, copy and paste this link into your browser:<br><a href="${url}" target="_blank" rel="noopener noreferrer" style="color: #166534;">${url}</a></p>
           </div>
           <div class="footer">
             &copy; ${new Date().getFullYear()} SFC Bakers. All rights reserved.
@@ -111,7 +111,7 @@ async function sendStoreApprovalEmail({ email, ownerName, storeName, setupToken 
     });
   } catch (err) {
     console.warn(`[Store Email] Template "store-approval" lookup failed, falling back to direct email:`, err.message);
-    const subject = `Your Access Request Approved - Set Password for "${storeName}"`;
+    const subject = `Welcome to SFC Bakers! Set Password for Your Store "${storeName}"`;
     const html = `
     <!DOCTYPE html>
     <html>
@@ -127,28 +127,28 @@ async function sendStoreApprovalEmail({ email, ownerName, storeName, setupToken 
           .btn-container { text-align: center; margin: 32px 0; }
           .btn { background-color: #166534; color: #ffffff !important; padding: 14px 32px; border-radius: 10px; font-weight: 600; text-decoration: none; display: inline-block; font-size: 15px; }
           .footer { background: #f8fafc; padding: 20px; text-align: center; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; }
-          .expiry-note { font-size: 13px; color: #dc2626; font-weight: 500; text-align: center; }
+          .expiry-note { font-size: 13px; color: #64748b; font-weight: 500; text-align: center; }
         </style>
       </head>
       <body>
         <div class="container">
           <div class="header">
-            <h1>Access Approved!</h1>
+            <h1>Welcome to SFC Bakers!</h1>
           </div>
           <div class="content">
             <div style="text-align: center;">
-              <span class="success-badge">&#10003; Admin Approval Granted</span>
+              <span class="success-badge">&#10003; Store Owner Access Ready</span>
             </div>
             <p>Dear <strong>${ownerName || "Partner"}</strong>,</p>
-            <p>Great news! The Administrator has reviewed and approved your access request for <strong>${storeName}</strong>.</p>
-            <p>Please click the button below to set your permanent login password and access your Store Owner Dashboard:</p>
+            <p>Congratulations! Your store <strong>${storeName}</strong> has been registered on the <strong>SFC Bakers</strong> platform.</p>
+            <p>Please click the button below to set your permanent login password and access your Store Owner Dashboard directly:</p>
 
             <div class="btn-container">
-              <a href="${setupUrl}" class="btn">Set My Password &amp; Login</a>
+              <a href="${setupUrl}" class="btn" target="_blank" rel="noopener noreferrer">Set My Password &amp; Access Store</a>
             </div>
 
-            <p class="expiry-note">This secure link is valid for 24 hours only.</p>
-            <p style="font-size: 13px; color: #64748b;">If the button does not work, copy and paste this link:<br><a href="${setupUrl}" style="color: #166534;">${setupUrl}</a></p>
+            <p class="expiry-note">This secure password setup link is valid for 7 days.</p>
+            <p style="font-size: 13px; color: #64748b;">If the button does not work, copy and paste this link into your browser:<br><a href="${setupUrl}" target="_blank" rel="noopener noreferrer" style="color: #166534;">${setupUrl}</a></p>
           </div>
           <div class="footer">
             &copy; ${new Date().getFullYear()} SFC Bakers. All rights reserved.
@@ -162,7 +162,7 @@ async function sendStoreApprovalEmail({ email, ownerName, storeName, setupToken 
       to: email,
       subject,
       html,
-      text: `Your access for "${storeName}" has been approved by admin! Please set your password using this link: ${setupUrl} (Valid for 24 hours).`,
+      text: `Welcome to SFC Bakers! Your store "${storeName}" has been created. Please set your password using this link: ${setupUrl}`,
       emailType: "store-approval",
     });
   }

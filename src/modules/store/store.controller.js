@@ -136,28 +136,21 @@ async function createStore(req, res) {
       phone: cleanOwnerPhone,
     };
 
-    const { store, user } = await storeModel.createStoreWithOwner({
+    const { store, user, setupToken } = await storeModel.createStoreWithOwner({
       storeData,
       ownerData,
       categoryIds: Array.isArray(categoryIds) ? categoryIds : [],
-    });
-
-    // Send invitation email in background
-    sendStoreInvitationEmail({
-      email: user.email,
-      ownerName: user.name,
-      storeName: store.name,
-    }).catch((emailErr) => {
-      console.error("[Store Creation] Welcome email sending error:", emailErr.message);
+      adminId: req.user?.id || null,
     });
 
     emitBranchStatusChange(store);
 
     return res.status(201).json({
       success: true,
-      message: `Store "${store.name}" and Owner account created successfully! Invitation sent to ${user.email}.`,
+      message: `Store "${store.name}" created successfully!`,
       store,
       owner: user,
+      setupToken,
     });
   } catch (error) {
     console.error("Create store error:", error);
@@ -184,6 +177,7 @@ async function listStores(req, res) {
       stores: result.stores,
       pagination: result.pagination,
       count: result.stores.length,
+      summary: result.summary,
     });
   } catch (error) {
     console.error("List stores error:", error);
@@ -436,23 +430,57 @@ async function requestStoreAccess(req, res) {
       });
     }
 
-    // Check if access has already been approved and waiting for password setup
-    const approvedRequest = await db("store_login_requests")
+    // Pre-approved password setup flow for store owners
+    let approvedRequest = await db("store_login_requests")
       .where({ user_id: user.id, status: "approved" })
       .where("setup_token_expires_at", ">", new Date())
+      .whereNotNull("setup_token")
       .orderBy("created_at", "desc")
       .first();
 
-    if (approvedRequest && approvedRequest.setup_token) {
-      return res.status(200).json({
-        success: true,
-        status: "approved_set_password",
-        hasPassword: false,
-        setupToken: approvedRequest.setup_token,
-        setupUrl: `/store/set-password?token=${encodeURIComponent(approvedRequest.setup_token)}&email=${encodeURIComponent(user.email)}`,
-        message: "Your access request has been approved! Redirecting to set your password...",
-      });
+    if (!approvedRequest) {
+      // Invalidate any previous expired/stale tokens for this user
+      await db("store_login_requests")
+        .where({ user_id: user.id })
+        .update({ setup_token: null });
+
+      const newSetupToken = crypto.randomBytes(32).toString("hex");
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const [created] = await db("store_login_requests")
+        .insert({
+          store_id: store.id,
+          user_id: user.id,
+          email: user.email,
+          status: "approved",
+          setup_token: newSetupToken,
+          setup_token_expires_at: expiresAt,
+          approved_at: new Date(),
+          permissions: JSON.stringify(["orders", "products", "inventory", "store_settings"]),
+        })
+        .returning("*");
+      approvedRequest = created;
     }
+
+    // Dispatch password setup link directly to the store owner's inbox
+    sendStoreApprovalEmail({
+      email: user.email,
+      ownerName: user.name,
+      storeName: store.name,
+      setupToken: approvedRequest.setup_token,
+    }).catch((emailErr) => {
+      console.error("[Store Access Request] Password setup email error:", emailErr.message);
+    });
+
+    return res.status(200).json({
+      success: true,
+      status: "approved_set_password",
+      status: "email_sent",
+      hasPassword: false,
+      setupToken: approvedRequest.setup_token,
+      setupUrl: `/store/set-password?token=${encodeURIComponent(approvedRequest.setup_token)}&email=${encodeURIComponent(user.email)}`,
+      message: "Please set your password to activate your Store Owner account.",
+      message: `Password setup link has been sent to your registered email (${user.email}). Please check your inbox to set your password.`,
+    });
 
     // Create or retrieve pending login request
     const request = await storeModel.createStoreLoginRequest({

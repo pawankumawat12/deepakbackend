@@ -273,7 +273,23 @@ async function listCustomers({
     .limit(l)
     .offset(offset);
 
-  const customers = await query;
+  const [customers, statsRow] = await Promise.all([
+    query,
+    db("users")
+      .where("role", "customer")
+      .select([
+        db.raw("COUNT(*)::int as total"),
+        db.raw("COUNT(CASE WHEN is_active = true AND (is_blocked = false OR is_blocked IS NULL) THEN 1 END)::int as active"),
+        db.raw("COUNT(CASE WHEN is_blocked = true THEN 1 END)::int as blocked"),
+      ])
+      .first(),
+  ]);
+
+  const summary = {
+    total: Number(statsRow?.total || total),
+    active: Number(statsRow?.active || 0),
+    blocked: Number(statsRow?.blocked || 0),
+  };
 
   return {
     customers,
@@ -283,6 +299,7 @@ async function listCustomers({
       limit: l,
       totalPages: Math.ceil(total / l) || 1,
     },
+    summary,
   };
 }
 

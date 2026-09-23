@@ -33,13 +33,13 @@ function calculateDistanceInKm(lat1, lon1, lat2, lon2) {
 }
 
 /**
- * Safely rounds a currency value to 2 decimal places using Math.round and Number.EPSILON
- * to avoid floating-point precision issues.
+ * Safely rounds a currency value to whole integers using Math.round
+ * Ensures no price has decimal points (e.g., 15.4 -> 15, 15.6 -> 16).
  */
 function roundCurrency(val) {
   const num = Number(val);
   if (isNaN(num) || !isFinite(num)) return 0;
-  return Math.round((num + Number.EPSILON) * 100) / 100;
+  return Math.round(num);
 }
 
 /**

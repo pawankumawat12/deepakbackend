@@ -408,22 +408,29 @@ async function createOrder(req, res) {
     );
 
     // 10.1 FCM PUSH NOTIFICATION TO ADMIN (Non-blocking / Decoupled)
-    try {
-      const fcmNotificationService = require("../../services/fcmNotification.service");
-      setImmediate(() => {
-        fcmNotificationService
-          .sendAdminNewOrderNotification({
-            orderId: order.id,
-            orderNumber: order.order_number || String(order.id),
-            totalAmount: order.total_amount,
-            customerName: finalCustomerName,
-          })
-          .catch((err) =>
-            console.error("[FCM Push Service Error]:", err.message)
-          );
-      });
-    } catch (fcmErr) {
-      console.error("[FCM Push Service Init Error]:", fcmErr.message);
+    // For online orders, push is triggered once payment succeeds via notifyPaymentSuccess to prevent duplicate pushes
+    const isCod =
+      String(paymentMethod).trim().toLowerCase() === "cash on delivery" ||
+      String(paymentMethod).trim().toLowerCase() === "cod";
+
+    if (isCod) {
+      try {
+        const fcmNotificationService = require("../../services/fcmNotification.service");
+        setImmediate(() => {
+          fcmNotificationService
+            .sendAdminNewOrderNotification({
+              orderId: order.id,
+              orderNumber: order.order_number || String(order.id),
+              totalAmount: order.total_amount,
+              customerName: finalCustomerName,
+            })
+            .catch((err) =>
+              console.error("[FCM Push Service Error]:", err.message)
+            );
+        });
+      } catch (fcmErr) {
+        console.error("[FCM Push Service Init Error]:", fcmErr.message);
+      }
     }
 
     // 11. RESPONSE
@@ -761,6 +768,7 @@ async function getAdminOrders(req, res) {
       data: result.orders,
       pagination: result.pagination,
       stats: result.stats,
+      summary: result.stats,
     });
   } catch (error) {
     console.error("Admin get orders error:", error);

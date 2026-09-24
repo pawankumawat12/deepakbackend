@@ -58,9 +58,16 @@ async function listCategories(req, res) {
       filters.includeAdmin = true;
     }
 
-    if (req.user && req.user.role === "store_owner") {
+    const adminOnly =
+      req.query.admin_only === "true" ||
+      req.query.admin_only === true ||
+      req.query.store_id === "admin";
+
+    if (adminOnly) {
+      filters.adminOnly = true;
+    } else if (req.user && req.user.role === "store_owner") {
       filters.storeId = req.user.store_id;
-    } else if (req.query.store_id) {
+    } else if (req.query.store_id && req.query.store_id !== "admin") {
       filters.storeId = Number(req.query.store_id);
     }
 

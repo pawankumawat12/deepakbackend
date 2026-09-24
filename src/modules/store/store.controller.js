@@ -810,8 +810,9 @@ async function updateMyStoreLocation(req, res) {
     if (city !== undefined) storeData.city = city ? String(city).trim() : null;
     if (state !== undefined) storeData.state = state ? String(state).trim() : "Rajasthan";
     if (pincode !== undefined) storeData.pincode = pincode ? String(pincode).trim() : null;
-    if (max_delivery_distance != null) {
-      storeData.max_delivery_distance = Math.max(1, parseFloat(max_delivery_distance) || 10.0);
+    // ONLY Admin is permitted to change max_delivery_distance (Store Owners cannot change delivery radius)
+    if (req.user.role === "admin" && max_delivery_distance != null) {
+      storeData.max_delivery_distance = Math.max(0.5, parseFloat(max_delivery_distance) || 10.0);
     }
 
     const updated = await storeModel.updateStore(store.id, storeData);

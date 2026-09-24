@@ -547,7 +547,13 @@ async function findOrderById(orderId, userId = null) {
   await ensureOrderStoreColumns();
   let query = db("orders as o")
     .leftJoin("stores as s", "o.store_id", "s.id")
-    .select("o.*", "s.name as store_name");
+    .select(
+      "o.*",
+      "s.name as store_name",
+      "s.latitude as store_latitude",
+      "s.longitude as store_longitude",
+      "s.address as store_address"
+    );
   const trimmed = String(orderId || "").trim();
   if (/^\d+$/.test(trimmed)) {
     query = query.where("o.id", Number(trimmed));
@@ -577,7 +583,14 @@ async function findAllOrders({ page = 1, limit = 20, status, search, storeId, is
   const offset = (p - 1) * l;
   let query = db("orders as o")
     .leftJoin("stores as s", "o.store_id", "s.id")
-    .select("o.*", "s.name as store_name", "s.auto_forward_orders as store_auto_forward_orders");
+    .select(
+      "o.*",
+      "s.name as store_name",
+      "s.latitude as store_latitude",
+      "s.longitude as store_longitude",
+      "s.address as store_address",
+      "s.auto_forward_orders as store_auto_forward_orders"
+    );
 
   if (storeId) {
     query = query.where("o.store_id", storeId);

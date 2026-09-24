@@ -74,13 +74,12 @@ async function listProducts(req, res) {
 
     const adminOnly =
       req.query.admin_only === "true" ||
-      req.query.admin_only === true;
+      req.query.admin_only === true ||
+      req.query.store_id === "admin";
 
     if (adminOnly) {
       filters.adminOnly = true;
-    }
-
-    if (req.user && req.user.role === "store_owner") {
+    } else if (req.user && req.user.role === "store_owner") {
       const storeId = parseIdParam(req.user.store_id);
       if (!storeId) {
         return res.status(403).json({
@@ -88,7 +87,7 @@ async function listProducts(req, res) {
         });
       }
       filters.storeId = storeId;
-    } else if (req.query.store_id !== undefined) {
+    } else if (req.query.store_id !== undefined && req.query.store_id !== "admin") {
       const storeId = parseIdParam(req.query.store_id);
       if (!storeId) {
         return res.status(400).json({ message: "Invalid store ID" });

@@ -96,6 +96,9 @@ function formatCartItems(rawItems) {
       exceedsStock,
       isMaxStockReached,
       stockMessage,
+      cannot_deliver: Boolean(item.cannot_deliver),
+      cannot_deliver_reason: item.cannot_deliver_reason || null,
+      is_deliverable: item.is_deliverable !== false && !item.cannot_deliver,
       added_at: item.added_at,
       updated_at: item.updated_at,
     };
@@ -105,6 +108,9 @@ function formatCartItems(rawItems) {
 function buildCartSummary(pricing, enrichedItems) {
   const stockProblemItems = enrichedItems.filter(
     (it) => it.isOutOfStock || it.exceedsStock
+  );
+  const undeliverableItems = enrichedItems.filter(
+    (it) => it.cannot_deliver
   );
 
   return {
@@ -142,6 +148,8 @@ function buildCartSummary(pricing, enrichedItems) {
     distanceKm: pricing.distance_km,
     maxDeliveryDistance: pricing.max_delivery_distance,
     isOutOfRange: pricing.is_out_of_range,
+    hasUndeliverableItems: undeliverableItems.length > 0 || Boolean(pricing.has_undeliverable_items),
+    undeliverableCount: undeliverableItems.length || pricing.undeliverable_count || 0,
 
     packagingFee: pricing.packaging_fee,
     platformFee: pricing.platform_fee,
@@ -172,6 +180,13 @@ async function respondWithCart(res, userId, message = "Success", options = {}) {
   let deliveryAddress = null;
   if (options.addressId) {
     deliveryAddress = await getAddressById(options.addressId, userId);
+  }
+  if (!deliveryAddress && options.lat != null && options.lng != null && !isNaN(options.lat) && !isNaN(options.lng)) {
+    deliveryAddress = {
+      latitude: Number(options.lat),
+      longitude: Number(options.lng),
+      formatted_address: "Selected Location",
+    };
   }
   if (!deliveryAddress) {
     const userAddresses = await getAddressesByUserId(userId);
@@ -206,6 +221,8 @@ async function respondWithCart(res, userId, message = "Success", options = {}) {
 async function getCart(req, res) {
   try {
     const addressId = req.query.addressId ? Number(req.query.addressId) : null;
+    const lat = req.query.lat != null ? Number(req.query.lat) : null;
+    const lng = req.query.lng != null ? Number(req.query.lng) : null;
     const paymentMethod = req.query.paymentMethod || "Cash on Delivery";
     const offerCode = req.query.offerCode || req.query.code || null;
     return await respondWithCart(
@@ -214,6 +231,8 @@ async function getCart(req, res) {
       "Cart fetched successfully",
       {
         addressId,
+        lat,
+        lng,
         paymentMethod,
         offerCode,
       }
@@ -464,10 +483,17 @@ async function getGuestCartPreview(req, res) {
       });
     }
 
+    const lat = req.body?.lat != null ? Number(req.body.lat) : null;
+    const lng = req.body?.lng != null ? Number(req.body.lng) : null;
+    const guestDeliveryAddress =
+      lat != null && lng != null && !isNaN(lat) && !isNaN(lng)
+        ? { latitude: lat, longitude: lng, formatted_address: "Selected Location" }
+        : null;
+
     const formattedItems = formatCartItems(populatedItems);
     const pricing = await calculateCartAndOrderPricing({
       items: formattedItems,
-      deliveryAddress: null,
+      deliveryAddress: guestDeliveryAddress,
       paymentMethod: "Cash on Delivery",
       offerCode,
     });
@@ -482,7 +508,7 @@ async function getGuestCartPreview(req, res) {
         items: enrichedItems,
         summary,
         pricing,
-        deliveryAddress: null,
+        deliveryAddress: guestDeliveryAddress,
       },
     });
   } catch (error) {

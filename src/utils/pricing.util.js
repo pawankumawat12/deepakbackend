@@ -260,65 +260,97 @@ async function calculateCartAndOrderPricing({
     ? roundCurrency(minimumOrderAmount - rawSubtotal)
     : 0;
 
-  // 4. Distance Calculation & Range Check
+  // 4. Distance Calculation & Range Check per Fulfilling Store
   let distanceKm = null;
   let isOutOfRange = false;
   let maxDeliveryDistance = null;
+  let resolvedStoreResult = null;
 
-  const branchStoreItem = Array.isArray(items)
-    ? items.find((i) => i.store_id != null)
-    : null;
-  const branchStoreId = branchStoreItem ? branchStoreItem.store_id : null;
-
-  if (branchStoreId != null) {
-    // Fulfilled by Branch Store
-    let branchStore = null;
+  if (
+    deliveryAddress &&
+    deliveryAddress.latitude != null &&
+    deliveryAddress.longitude != null
+  ) {
     try {
-      branchStore = await db("stores").where({ id: branchStoreId }).first();
-    } catch {
-      // ignore
-    }
-
-    if (
-      branchStore &&
-      branchStore.latitude != null &&
-      branchStore.longitude != null &&
-      deliveryAddress &&
-      deliveryAddress.latitude != null &&
-      deliveryAddress.longitude != null
-    ) {
-      distanceKm = calculateDistanceInKm(
-        branchStore.latitude,
-        branchStore.longitude,
+      const { resolveStoreByCustomerLocation } = require("../models/store.model");
+      resolvedStoreResult = await resolveStoreByCustomerLocation(
         deliveryAddress.latitude,
         deliveryAddress.longitude
       );
-      maxDeliveryDistance = Number(branchStore.max_delivery_distance) || 10;
-      isOutOfRange =
-        maxDeliveryDistance > 0 && distanceKm != null
-          ? distanceKm > maxDeliveryDistance
-          : false;
+    } catch (e) {
+      console.warn("Could not resolve store by location in pricing:", e.message);
     }
-  } else {
-    // Fulfilled by Admin: Admin can deliver everywhere!
-    if (
-      deliveryAddress &&
-      deliveryAddress.latitude != null &&
-      deliveryAddress.longitude != null &&
-      settings.store_latitude != null &&
-      settings.store_longitude != null
-    ) {
-      distanceKm = calculateDistanceInKm(
-        settings.store_latitude,
-        settings.store_longitude,
-        deliveryAddress.latitude,
-        deliveryAddress.longitude
-      );
-    }
-    // Admin delivers everywhere, so isOutOfRange is always false for Admin
-    maxDeliveryDistance = null;
-    isOutOfRange = false;
   }
+
+  const activeStoreType = resolvedStoreResult ? resolvedStoreResult.storeType : "admin";
+  const activeStore = resolvedStoreResult ? resolvedStoreResult.store : null;
+  const activeStoreId = (activeStoreType === "branch" && activeStore?.id) ? Number(activeStore.id) : null;
+  const activeCanDeliver = resolvedStoreResult ? resolvedStoreResult.can_deliver !== false && !resolvedStoreResult.outOfDeliveryZone : true;
+
+  if (activeStore && resolvedStoreResult?.distanceKm != null) {
+    distanceKm = Number(resolvedStoreResult.distanceKm);
+    maxDeliveryDistance = Number(activeStore.max_delivery_distance) || 10;
+  } else if (
+    deliveryAddress &&
+    deliveryAddress.latitude != null &&
+    deliveryAddress.longitude != null &&
+    settings.store_latitude != null &&
+    settings.store_longitude != null
+  ) {
+    distanceKm = calculateDistanceInKm(
+      settings.store_latitude,
+      settings.store_longitude,
+      deliveryAddress.latitude,
+      deliveryAddress.longitude
+    );
+    maxDeliveryDistance = Number(settings.max_delivery_distance) || 15;
+  }
+
+  // Check each item for store mismatch or delivery range issues
+  let hasUndeliverableItems = false;
+  let undeliverableItemsCount = 0;
+
+  if (Array.isArray(items)) {
+    for (const item of items) {
+      const itemStoreId = item.store_id != null ? Number(item.store_id) : null;
+      let cannotDeliver = false;
+      let cannotDeliverReason = null;
+
+      if (deliveryAddress && deliveryAddress.latitude != null && deliveryAddress.longitude != null) {
+        if (activeStoreType === "branch") {
+          if (itemStoreId !== activeStoreId) {
+            cannotDeliver = true;
+            cannotDeliverReason = itemStoreId != null
+              ? `Ye product dusre store (${item.store_name || "Branch"}) ka hai aur is location per deliver nahi ho sakta. Please ise remove karein.`
+              : `Ye product Main Bakery ka hai aur aapki location (${activeStore?.name || "Branch"}) se deliver nahi ho sakta. Please ise remove karein.`;
+          }
+        } else {
+          // Fulfilling store is Admin (Main Bakery)
+          if (itemStoreId != null) {
+            cannotDeliver = true;
+            cannotDeliverReason = `Ye product dusre store (${item.store_name || "Branch"}) ka hai aur is location per deliver nahi ho sakta. Please ise remove karein.`;
+          } else if (maxDeliveryDistance > 0 && distanceKm != null && distanceKm > maxDeliveryDistance) {
+            cannotDeliver = true;
+            cannotDeliverReason = `Aapka delivery address hamari maximum delivery limit (${maxDeliveryDistance} km) se bahar hai (${distanceKm} km). Please ise remove karein.`;
+          }
+        }
+      }
+
+      item.cannot_deliver = cannotDeliver;
+      item.cannot_deliver_reason = cannotDeliverReason;
+      item.is_deliverable = !cannotDeliver;
+
+      if (cannotDeliver) {
+        hasUndeliverableItems = true;
+        undeliverableItemsCount++;
+      }
+    }
+  }
+
+  isOutOfRange =
+    !activeCanDeliver ||
+    (maxDeliveryDistance > 0 && distanceKm != null && distanceKm > maxDeliveryDistance) ||
+    hasUndeliverableItems;
 
   // 5. Delivery Fee Calculation
   const freeDeliveryThreshold = roundCurrency(settings.free_delivery_threshold);
@@ -430,6 +462,8 @@ async function calculateCartAndOrderPricing({
     distance_km: distanceKm,
     max_delivery_distance: maxDeliveryDistance,
     is_out_of_range: isOutOfRange,
+    has_undeliverable_items: hasUndeliverableItems,
+    undeliverable_count: undeliverableItemsCount,
 
     // Additional Fees
     packaging_fee: packagingFee,
@@ -446,8 +480,8 @@ async function calculateCartAndOrderPricing({
     grand_total: grandTotal,
 
     // Store Location snapshot
-    store_latitude: settings.store_latitude,
-    store_longitude: settings.store_longitude,
+    store_latitude: (activeStore && activeStore.latitude != null) ? Number(activeStore.latitude) : settings.store_latitude,
+    store_longitude: (activeStore && activeStore.longitude != null) ? Number(activeStore.longitude) : settings.store_longitude,
 
     // Timer & Metadata
     currency: "INR",

@@ -29,6 +29,7 @@ function findCategories({
   parentCategoryId,
   storeId,
   includeAdmin = false,
+  adminOnly = false,
   isActive,
   search,
   sortBy = "created_at",
@@ -44,23 +45,18 @@ function findCategories({
     }
   }
 
-  if (storeId !== undefined) {
-    if (includeAdmin) {
-      query = query.where(function () {
-        this.whereIn(
-          "id",
-          db("store_categories").select("category_id").where({ store_id: storeId })
-        ).orWhereIn(
-          "id",
-          db("products").distinct("category_id").whereNull("store_id").where("is_active", true)
-        );
-      });
-    } else {
-      query = query.whereIn(
-        "id",
-        db("store_categories").select("category_id").where({ store_id: storeId })
-      );
-    }
+  if (adminOnly) {
+    // Show only categories that have active Admin products
+    query = query.whereIn(
+      "id",
+      db("products").distinct("category_id").whereNull("store_id").where("is_active", true)
+    );
+  } else if (storeId !== undefined) {
+    // Strictly show only categories assigned to this branch store
+    query = query.whereIn(
+      "id",
+      db("store_categories").select("category_id").where({ store_id: storeId })
+    );
   }
 
   if (isActive !== undefined) {
@@ -82,7 +78,7 @@ function findCategories({
     .offset(offset);
 }
 
-function countCategories({ parentCategoryId, storeId, includeAdmin = false, isActive, search }) {
+function countCategories({ parentCategoryId, storeId, includeAdmin = false, adminOnly = false, isActive, search }) {
   let query = db("categories");
 
   if (parentCategoryId !== undefined) {
@@ -93,23 +89,16 @@ function countCategories({ parentCategoryId, storeId, includeAdmin = false, isAc
     }
   }
 
-  if (storeId !== undefined) {
-    if (includeAdmin) {
-      query = query.where(function () {
-        this.whereIn(
-          "id",
-          db("store_categories").select("category_id").where({ store_id: storeId })
-        ).orWhereIn(
-          "id",
-          db("products").distinct("category_id").whereNull("store_id").where("is_active", true)
-        );
-      });
-    } else {
-      query = query.whereIn(
-        "id",
-        db("store_categories").select("category_id").where({ store_id: storeId })
-      );
-    }
+  if (adminOnly) {
+    query = query.whereIn(
+      "id",
+      db("products").distinct("category_id").whereNull("store_id").where("is_active", true)
+    );
+  } else if (storeId !== undefined) {
+    query = query.whereIn(
+      "id",
+      db("store_categories").select("category_id").where({ store_id: storeId })
+    );
   }
 
   if (isActive !== undefined) {

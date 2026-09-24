@@ -801,14 +801,8 @@ async function checkTerritoryConflict(lat, lng, excludeStoreId = null) {
 
   // 1. Check against Admin Main Bakery location from settings
   try {
-    const settingsRow = await db("settings").where({ key: "pricing" }).first();
-    let pricingSettings = {};
-    if (settingsRow && settingsRow.value) {
-      pricingSettings =
-        typeof settingsRow.value === "string"
-          ? JSON.parse(settingsRow.value)
-          : settingsRow.value;
-    }
+    const { getOrderPricingSettings } = require("./settings.model");
+    const pricingSettings = await getOrderPricingSettings();
     const adminLat = Number(pricingSettings.store_latitude);
     const adminLng = Number(pricingSettings.store_longitude);
     const adminRadius = Number(pricingSettings.max_delivery_distance) || 10;
@@ -825,7 +819,7 @@ async function checkTerritoryConflict(lat, lng, excludeStoreId = null) {
           },
           distanceKm: distToAdmin,
           allowedDistance: adminRadius,
-          message: `This location is within the active delivery zone of Main Bakery (${distToAdmin} km away, delivery zone is ${adminRadius} km). New stores cannot be opened inside an existing delivery zone.`,
+          message: `This location is within the active delivery zone of Main Bakery / Admin (${distToAdmin.toFixed(2)} km away, Admin delivery radius is ${adminRadius} km). New stores cannot be opened or moved inside Admin's delivery zone.`,
         };
       }
     }
@@ -874,29 +868,24 @@ async function resolveStoreByCustomerLocation(custLat, custLng) {
   const numLat = Number(custLat);
   const numLng = Number(custLng);
 
-  // 1. Get Admin store details as the universal fallback (Admin delivers everywhere)
+  // 1. Get Admin store details from order_pricing settings
   let adminStore = {
     id: null,
     name: "Main Bakery",
     is_main_admin: true,
-    latitude: 27.559134,
-    longitude: 75.236982,
-    max_delivery_distance: null, // Admin delivers everywhere
+    latitude: 26.9124,
+    longitude: 75.7873,
+    max_delivery_distance: 10,
     can_deliver: true,
   };
 
   try {
-    const settingsRow = await db("settings").where({ key: "pricing" }).first();
-    if (settingsRow && settingsRow.value) {
-      const p =
-        typeof settingsRow.value === "string"
-          ? JSON.parse(settingsRow.value)
-          : settingsRow.value;
-      if (p.store_latitude) adminStore.latitude = Number(p.store_latitude);
-      if (p.store_longitude) adminStore.longitude = Number(p.store_longitude);
-      if (p.max_delivery_distance != null) {
-        adminStore.max_delivery_distance = Number(p.max_delivery_distance);
-      }
+    const { getOrderPricingSettings } = require("./settings.model");
+    const pricingSettings = await getOrderPricingSettings();
+    if (pricingSettings.store_latitude) adminStore.latitude = Number(pricingSettings.store_latitude);
+    if (pricingSettings.store_longitude) adminStore.longitude = Number(pricingSettings.store_longitude);
+    if (pricingSettings.max_delivery_distance != null) {
+      adminStore.max_delivery_distance = Number(pricingSettings.max_delivery_distance);
     }
   } catch (err) {
     console.warn("[Store Model] Admin store fetch notice:", err.message);
@@ -942,11 +931,12 @@ async function resolveStoreByCustomerLocation(custLat, custLng) {
       store: bestStore,
       storeType: "branch",
       distanceKm: minDistance,
+      can_deliver: true,
       message: `Fulfilled by local branch: ${bestStore.name} (${minDistance} km away)`,
     };
   }
 
-  // 3. Admin delivers everywhere!
+  // 3. Admin delivers fallback
   const distToAdmin = calculateDistanceInKm(
     numLat,
     numLng,
@@ -954,14 +944,22 @@ async function resolveStoreByCustomerLocation(custLat, custLng) {
     adminStore.longitude
   );
 
+  const adminMaxDist = adminStore.max_delivery_distance;
+  const canAdminDeliver = adminMaxDist == null || distToAdmin == null || distToAdmin <= adminMaxDist;
+
   return {
     store: {
       ...adminStore,
       distanceKm: distToAdmin,
+      can_deliver: canAdminDeliver,
     },
     storeType: "admin",
     distanceKm: distToAdmin,
-    message: "Fulfilled by Main Bakery (Universal Delivery)",
+    can_deliver: canAdminDeliver,
+    outOfDeliveryZone: !canAdminDeliver,
+    message: canAdminDeliver
+      ? `Fulfilled by Main Bakery (${distToAdmin} km away)`
+      : `Location is ${distToAdmin} km away (outside our maximum delivery radius of ${adminMaxDist} km).`,
   };
 }
 

@@ -547,12 +547,16 @@ async function findOrderById(orderId, userId = null) {
   await ensureOrderStoreColumns();
   let query = db("orders as o")
     .leftJoin("stores as s", "o.store_id", "s.id")
+    .leftJoin("users as owner", "s.owner_id", "owner.id")
     .select(
       "o.*",
       "s.name as store_name",
       "s.latitude as store_latitude",
       "s.longitude as store_longitude",
-      "s.address as store_address"
+      "s.address as store_address",
+      "s.phone as store_phone",
+      "owner.phone as store_owner_phone",
+      "owner.name as store_owner_name"
     );
   const trimmed = String(orderId || "").trim();
   if (/^\d+$/.test(trimmed)) {
@@ -583,12 +587,16 @@ async function findAllOrders({ page = 1, limit = 20, status, search, storeId, is
   const offset = (p - 1) * l;
   let query = db("orders as o")
     .leftJoin("stores as s", "o.store_id", "s.id")
+    .leftJoin("users as owner", "s.owner_id", "owner.id")
     .select(
       "o.*",
       "s.name as store_name",
       "s.latitude as store_latitude",
       "s.longitude as store_longitude",
       "s.address as store_address",
+      "s.phone as store_phone",
+      "owner.phone as store_owner_phone",
+      "owner.name as store_owner_name",
       "s.auto_forward_orders as store_auto_forward_orders"
     );
 

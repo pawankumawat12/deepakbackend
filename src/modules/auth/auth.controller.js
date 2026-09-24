@@ -1479,7 +1479,7 @@ const refreshAccessToken = async (req, res) => {
 
 const getMe = async (req, res) => {
   try {
-    const user = await findUserById(req.user.id);
+    const user = req.currentUser || (await findUserById(req.user.id));
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const isStorefrontClient =

@@ -39,8 +39,20 @@ function verifyToken(req, res, next) {
       try {
         const user = await db("users")
           .where({ id: decoded.id })
-          .select("id", "role", "is_blocked", "is_active", "block_reason")
+          .select(
+            "id",
+            "name",
+            "email",
+            "phone",
+            "image",
+            "role",
+            "is_blocked",
+            "is_active",
+            "block_reason"
+          )
           .first();
+
+        req.currentUser = user;
 
         if (
           user &&

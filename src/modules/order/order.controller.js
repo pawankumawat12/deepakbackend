@@ -431,6 +431,18 @@ async function createOrder(req, res) {
       } catch (fcmErr) {
         console.error("[FCM Push Service Init Error]:", fcmErr.message);
       }
+
+      // Automated WhatsApp Order Alert (Store Owner or Admin based on dispatch permission)
+      try {
+        const { sendOrderWhatsAppAlert } = require("../../services/whatsapp.service");
+        setImmediate(() => {
+          sendOrderWhatsAppAlert(order).catch((err) =>
+            console.error("[WhatsApp Order Alert Error]:", err.message)
+          );
+        });
+      } catch (waErr) {
+        console.error("[WhatsApp Alert Init Error]:", waErr.message);
+      }
     }
 
     // 11. RESPONSE
@@ -828,6 +840,10 @@ async function updateStatus(req, res) {
       status,
     });
 
+    emitToAdmin("admin_order_updated", {
+      order: order || updated,
+    });
+
     return res.status(200).json({
       success: true,
       message: "Order status updated successfully",
@@ -859,6 +875,7 @@ async function acceptOrderController(req, res) {
     }
 
     const updated = await acceptOrder(orderId, { notes });
+    const fullOrder = await findOrderById(orderId);
 
     // Notify customer in real-time
     if (updated && updated.user_id) {
@@ -893,7 +910,7 @@ async function acceptOrderController(req, res) {
     });
 
     emitToAdmin("admin_order_updated", {
-      order: updated,
+      order: fullOrder || updated,
     });
 
     return res.status(200).json({
@@ -927,6 +944,7 @@ async function rejectOrderController(req, res) {
     }
 
     const updated = await rejectOrder(orderId, { cancelReason });
+    const fullOrder = await findOrderById(orderId);
 
     // Notify customer in real-time
     if (updated && updated.user_id) {
@@ -934,7 +952,7 @@ async function rejectOrderController(req, res) {
         userId: updated.user_id,
         role: "customer",
         type: "order_rejected",
-        title: `Order Declined ⚠️`,
+        title: "Order Declined",
         message: `Your order #${updated.order_number || updated.id} could not be accepted. Reason: ${cancelReason}`,
         orderId: updated.id,
         dataJson: { orderId: updated.id, status: "Cancelled", cancelReason },
@@ -961,7 +979,7 @@ async function rejectOrderController(req, res) {
     });
 
     emitToAdmin("admin_order_updated", {
-      order: updated,
+      order: fullOrder || updated,
     });
 
     return res.status(200).json({
@@ -1016,6 +1034,18 @@ async function forwardOrderToStoreHandler(req, res) {
 
     emitToAdmin("admin_order_updated", { order: updated });
 
+    // Automated WhatsApp alert to Store Owner on order dispatch
+    try {
+      const { sendOrderWhatsAppAlert } = require("../../services/whatsapp.service");
+      setImmediate(() => {
+        sendOrderWhatsAppAlert(updated).catch((err) =>
+          console.error("[WhatsApp Forward Order Alert Error]:", err.message)
+        );
+      });
+    } catch (waErr) {
+      console.error("[WhatsApp Forward Alert Init Error]:", waErr.message);
+    }
+
     return res.status(200).json({
       success: true,
       message: `Order #${updated.order_number || updated.id} forwarded to store successfully.`,
@@ -1053,6 +1083,12 @@ async function markItemProduced(req, res) {
     }
 
     const updated = await updateItemProductionStatus(itemId, productionStatus);
+    const item = await db("order_items").where({ id: itemId }).first();
+    if (item?.order_id) {
+      const fullOrder = await findOrderById(item.order_id);
+      emitToAdmin("admin_order_updated", { order: fullOrder, orderId: item.order_id });
+    }
+
     return res.status(200).json({
       success: true,
       message: "Item production status updated successfully",
@@ -1095,6 +1131,10 @@ async function cancelUserOrder(req, res) {
       orderId: updated.id,
       orderNumber: updated.order_number || `#SFC-${updated.id}`,
       cancelReason,
+    });
+
+    emitToAdmin("admin_order_updated", {
+      order: updated,
     });
 
     return res.status(200).json({
@@ -1640,6 +1680,10 @@ async function bulkUpdateOrderStatusHandler(req, res) {
     }
 
     emitToAdmin("admin_order_status_updated", {
+      count: result.updatedCount,
+      status,
+    });
+    emitToAdmin("admin_order_updated", {
       count: result.updatedCount,
       status,
     });

@@ -122,10 +122,10 @@ function initSocket(httpServer) {
     // 1. Join user's private room (ONLY for their verified ID)
     socket.join(`user_${user.id}`);
 
-    // 2. Join Admin room ONLY if authenticated role is admin
-    if (user.role === "admin") {
+    // 2. Join Admin room for admin and store_owner roles
+    if (user.role === "admin" || user.role === "store_owner") {
       socket.join("admin");
-      console.log(`[Socket.IO] Admin socket ${socket.id} joined 'admin' room`);
+      console.log(`[Socket.IO] ${user.role} socket ${socket.id} joined 'admin' room`);
     }
 
     // 3. Client requests to join an order chat room (enforces DB ownership check)

@@ -14,6 +14,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@whiskeysockets/baileys": "^6.17.16",
     "bcrypt": "^6.0.0",
     "cloudinary": "^2.11.0",
     "cookie-parser": "^1.4.7",
@@ -23,11 +24,13 @@
     "express-rate-limit": "^8.7.0",
     "firebase-admin": "^13.10.0",
     "google-auth-library": "^11.0.2",
+    "jimp": "^0.16.13",
     "jsonwebtoken": "^9.0.3",
     "knex": "^3.3.0",
     "multer": "^2.2.0",
     "pdfkit": "^0.20.2",
     "pg": "^8.23.0",
+    "qrcode": "^1.5.4",
     "razorpay": "^2.9.8",
     "resend": "^6.28.0",
     "socket.io": "^4.8.3"

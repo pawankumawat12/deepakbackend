@@ -113,6 +113,18 @@ async function notifyPaymentSuccess(order, paymentId, source = "api") {
     } catch (fcmErr) {
       console.error("[FCM Push Service Error]:", fcmErr.message);
     }
+
+    // Automated WhatsApp Order Alert for Online Paid Orders
+    try {
+      const { sendOrderWhatsAppAlert } = require("./whatsapp.service");
+      setImmediate(() => {
+        sendOrderWhatsAppAlert(order).catch((waErr) =>
+          console.error("[WhatsApp Online Order Alert Error]:", waErr.message)
+        );
+      });
+    } catch (waErr) {
+      console.error("[WhatsApp Alert Init Error]:", waErr.message);
+    }
   } catch (err) {
     console.error("[OrderPaymentService] notifyPaymentSuccess error:", err);
   }

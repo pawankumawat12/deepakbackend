@@ -489,19 +489,38 @@ function formatOrderRow(order) {
 }
 
 async function findOrdersByUser(userId, { page = 1, limit = 10, status = null } = {}) {
+  await ensureOrderStoreColumns();
   const p = Math.max(1, Number(page) || 1);
   const l = Math.max(1, Math.min(100, Number(limit) || 10));
   const offset = (p - 1) * l;
 
-  let query = db("orders").where({ user_id: userId });
+  let query = db("orders as o")
+    .leftJoin("stores as s", "o.store_id", "s.id")
+    .leftJoin("users as owner", "s.owner_id", "owner.id")
+    .select(
+      "o.*",
+      "s.name as store_name",
+      "s.latitude as store_latitude",
+      "s.longitude as store_longitude",
+      "s.address as store_address",
+      "s.phone as store_phone",
+      "owner.phone as store_owner_phone",
+      "owner.name as store_owner_name"
+    )
+    .where("o.user_id", userId);
 
   if (status && String(status).trim() && String(status).toLowerCase() !== "all") {
-    query = query.where({ status });
+    query = query.where("o.status", status);
+  }
+
+  let countQuery = db("orders as o").where("o.user_id", userId);
+  if (status && String(status).trim() && String(status).toLowerCase() !== "all") {
+    countQuery = countQuery.where("o.status", status);
   }
 
   const [orders, countRow] = await Promise.all([
-    query.clone().orderBy("created_at", "desc").limit(l).offset(offset),
-    query.clone().count("id as count").first(),
+    query.orderBy("o.created_at", "desc").limit(l).offset(offset),
+    countQuery.count("o.id as count").first(),
   ]);
 
   const total = Number(countRow?.count || 0);

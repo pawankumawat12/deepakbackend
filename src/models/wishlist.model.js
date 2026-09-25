@@ -1,6 +1,6 @@
 const db = require("../../config/db");
 
-async function getWishlistItems(userId, { page, limit } = {}) {
+async function getWishlistItems(userId, { page, limit, storeId } = {}) {
   let query = db("wishlist_items")
     .select([
       "wishlist_items.id as wishlist_id",
@@ -15,6 +15,8 @@ async function getWishlistItems(userId, { page, limit } = {}) {
       "products.images",
       "products.is_active",
       "products.category_id",
+      "products.store_id",
+      "stores.name as store_name",
       "categories.name as category_name",
     ])
     .join("products", "wishlist_items.product_id", "products.id")
@@ -23,19 +25,35 @@ async function getWishlistItems(userId, { page, limit } = {}) {
     .where("wishlist_items.user_id", userId)
     .orderBy("wishlist_items.created_at", "desc");
 
+  if (storeId !== undefined && storeId !== null && storeId !== "") {
+    if (storeId === "admin") {
+      query = query.whereNull("products.store_id");
+    } else {
+      query = query.where("products.store_id", Number(storeId));
+    }
+  }
+
   if (page && limit) {
     const p = Math.max(1, Number(page) || 1);
     const l = Math.max(1, Math.min(100, Number(limit) || 10));
     const offset = (p - 1) * l;
 
+    let countQuery = db("wishlist_items")
+      .join("products", "wishlist_items.product_id", "products.id")
+      .leftJoin("stores", "products.store_id", "stores.id")
+      .where("wishlist_items.user_id", userId);
+
+    if (storeId !== undefined && storeId !== null && storeId !== "") {
+      if (storeId === "admin") {
+        countQuery = countQuery.whereNull("products.store_id");
+      } else {
+        countQuery = countQuery.where("products.store_id", Number(storeId));
+      }
+    }
+
     const [items, countRow] = await Promise.all([
       query.clone().limit(l).offset(offset),
-      db("wishlist_items")
-        .join("products", "wishlist_items.product_id", "products.id")
-        .leftJoin("stores", "products.store_id", "stores.id")
-        .where("wishlist_items.user_id", userId)
-        .count("wishlist_items.id as count")
-        .first(),
+      countQuery.count("wishlist_items.id as count").first(),
     ]);
 
     const total = Number(countRow?.count || 0);

@@ -45,19 +45,14 @@ function findCategories({
     }
   }
 
-  if (adminOnly) {
-    // Show only categories that have active Admin products
-    query = query.whereIn(
-      "id",
-      db("products").distinct("category_id").whereNull("store_id").where("is_active", true)
-    );
-  } else if (storeId !== undefined) {
+  if (storeId !== undefined) {
     // Strictly show only categories assigned to this branch store
     query = query.whereIn(
       "id",
       db("store_categories").select("category_id").where({ store_id: storeId })
     );
   }
+  // Note: For Admin store (adminOnly or storeId undefined), all categories created by Admin are shown.
 
   if (isActive !== undefined) {
     query = query.where({ is_active: isActive });
@@ -89,12 +84,7 @@ function countCategories({ parentCategoryId, storeId, includeAdmin = false, admi
     }
   }
 
-  if (adminOnly) {
-    query = query.whereIn(
-      "id",
-      db("products").distinct("category_id").whereNull("store_id").where("is_active", true)
-    );
-  } else if (storeId !== undefined) {
+  if (storeId !== undefined) {
     query = query.whereIn(
       "id",
       db("store_categories").select("category_id").where({ store_id: storeId })
